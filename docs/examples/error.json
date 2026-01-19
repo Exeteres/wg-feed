@@ -1,0 +1,6 @@
+{
+  "version": "wg-feed-00",
+  "success": false,
+  "message": "Invalid subscription ID provided.",
+  "retriable": false
+}

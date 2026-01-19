@@ -1,0 +1,123 @@
+name: Release
+
+on:
+  push:
+    branches:
+      - main
+    paths:
+      - .github/workflows/release.yaml
+      - docker/**
+      - go.mod
+      - go.sum
+      - cmd/**
+      - internal/**
+
+env:
+  REGISTRY: ghcr.io
+  IMAGE_PREFIX: ghcr.io/exeteres/wg-feed
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      packages: write
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Login to GitHub Container Registry
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Set up QEMU
+        uses: docker/setup-qemu-action@v3
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+        with:
+          install: true
+
+      - name: Prepare Release Notes
+        uses: nosovj/llm-release-action@v1
+        id: release
+        with:
+          model: gemini/gemini-2.5-flash
+          changelog_config: |
+            default:
+              preset: developer
+        env:
+          GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+
+      - name: Build and push wg-feed-server
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: ./docker/scratch.dockerfile
+          push: true
+          tags: |
+            ${{ env.IMAGE_PREFIX }}/server:latest
+            ${{ env.IMAGE_PREFIX }}/server:${{ steps.release.outputs.next_version }}
+          platforms: linux/amd64,linux/arm64
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+          build-args: |
+            CMD=wg-feed-server
+
+      - name: Build and push wg-feed-upload
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: ./docker/scratch.dockerfile
+          push: true
+          tags: |
+            ${{ env.IMAGE_PREFIX }}/upload:latest
+            ${{ env.IMAGE_PREFIX }}/upload:${{ steps.release.outputs.next_version }}
+          platforms: linux/amd64,linux/arm64
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+          build-args: |
+            CMD=wg-feed-upload
+
+      - name: Build and push wg-feed-daemon
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: ./docker/wireguard.dockerfile
+          push: true
+          tags: |
+            ${{ env.IMAGE_PREFIX }}/daemon:latest
+            ${{ env.IMAGE_PREFIX }}/daemon:${{ steps.release.outputs.next_version }}
+          platforms: linux/amd64,linux/arm64
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+          build-args: |
+            CMD=wg-feed-daemon
+
+      - name: Build and push wg-feed-apply
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: ./docker/wireguard.dockerfile
+          push: true
+          tags: |
+            ${{ env.IMAGE_PREFIX }}/apply:latest
+            ${{ env.IMAGE_PREFIX }}/apply:${{ steps.release.outputs.next_version }}
+          platforms: linux/amd64,linux/arm64
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+          build-args: |
+            CMD=wg-feed-apply
+
+      - name: Create GitHub Release
+        run: |
+          CHANGELOG=$(echo '${{ steps.release.outputs.changelogs }}' | jq -r '.default.en')
+          gh release create ${{ steps.release.outputs.next_version }} --notes "$CHANGELOG"
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}

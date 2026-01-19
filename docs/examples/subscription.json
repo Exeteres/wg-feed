@@ -1,0 +1,42 @@
+{
+  "version": "wg-feed-00",
+  "success": true,
+  "revision": "e52eec30ab2c0e632aea07954ce377610bf354ca0e15df948f8d09c74730e127",
+  "ttl_seconds": 3600,
+  "supports_sse": true,
+  "data": {
+    "id": "d9b568f9-5bc8-4d14-b2ed-ef8f3c0b8731",
+    "endpoints": [
+      "https://example.invalid/subscription"
+    ],
+    "display_info": {
+      "title": "Example VPN Subscription",
+      "description": "Example wg-feed document showing two tunnels",
+      "icon_url": "data:image/svg+xml;base64,PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHZpZXdCb3g9IjAgMCAxNiAxNiI+PGNpcmNsZSBjeD0iOCIgY3k9IjgiIHI9IjciLz48L3N2Zz4="
+    },
+    "warning_message": "Subscription expired; please renew to continue receiving updates.",
+    "tunnels": [
+      {
+        "id": "demo-primary",
+        "name": "demo-primary",
+        "display_info": {
+          "title": "Demo Primary",
+          "description": "Primary tunnel"
+        },
+        "enabled": true,
+        "forced": true,
+        "wg_quick_config": "[Interface]\nAddress = 10.20.0.2/32\nPrivateKey = CLIENT_PRIVATE_KEY_BASE64==\nDNS = 10.20.0.1\n\n# Non-standard keys/sections may be included and MUST be preserved by wg-feed clients\n# ExcludedApplications = com.example.app1, com.example.app2\n\n[Peer]\nPublicKey = SERVER_PUBLIC_KEY_BASE64==\nPresharedKey = PRESHARED_KEY_BASE64==\nEndpoint = vpn.example.com:51820\nAllowedIPs = 0.0.0.0/0, ::/0\nPersistentKeepalive = 25\n"
+      },
+      {
+        "id": "demo-secondary",
+        "name": "demo-secondary",
+        "display_info": {
+          "title": "Demo Secondary"
+        },
+        "enabled": false,
+        "forced": false,
+        "wg_quick_config": "[Interface]\nAddress = 10.21.0.2/32\nPrivateKey = CLIENT_PRIVATE_KEY_BASE64==\nDNS = 10.21.0.1\n\n[Peer]\nPublicKey = SERVER_PUBLIC_KEY_BASE64==\nPresharedKey = PRESHARED_KEY_BASE64==\nEndpoint = vpn2.example.com:51820\nAllowedIPs = 0.0.0.0/0, ::/0\nPersistentKeepalive = 25\n"
+      }
+    ]
+  }
+}

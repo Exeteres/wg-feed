@@ -1,6 +1,6 @@
 # wg-feed
 
-wg-feed is a draft protocol and reference implementation for distributing WireGuard tunnel configurations via setup URLs.
+wg-feed is a draft protocol and reference implementation for distributing WireGuard tunnel configurations via subscription URLs.
 
 The core design goal is to let clients fetch a JSON “feed document” over HTTPS and reconcile locally-managed tunnels (create/update/remove) to match, while keeping the tunnel payload as raw `wg-quick` configuration text to preserve client-specific extensions.
 

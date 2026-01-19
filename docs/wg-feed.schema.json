@@ -1,0 +1,211 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://example.invalid/schemas/wg-feed.schema.json",
+  "title": "wg-feed Response Document",
+  "type": "object",
+  "oneOf": [
+    { "$ref": "#/definitions/success_response" },
+    { "$ref": "#/definitions/error_response" }
+  ],
+  "definitions": {
+    "success_response": {
+      "type": "object",
+      "oneOf": [
+        { "$ref": "#/definitions/success_response_unencrypted" },
+        { "$ref": "#/definitions/success_response_encrypted" }
+      ]
+    },
+    "success_response_unencrypted": {
+      "type": "object",
+      "required": ["version", "success", "revision", "ttl_seconds", "data"],
+      "additionalProperties": true,
+      "not": {
+        "anyOf": [
+          { "required": ["encrypted"] },
+          { "required": ["encrypted_data"] }
+        ]
+      },
+      "properties": {
+        "version": {
+          "type": "string",
+          "const": "wg-feed-00"
+        },
+        "success": {
+          "type": "boolean",
+          "const": true
+        },
+        "revision": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Opaque success-response revision identifier. Servers MUST set the HTTP ETag to exactly this same value."
+        },
+        "ttl_seconds": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "Suggested refresh interval"
+        },
+        "supports_sse": {
+          "type": "boolean",
+          "default": false,
+          "description": "Server capability declaration. If true, the server MUST support SSE for this Subscription URL when the client sends Accept: text/event-stream, and MUST respond with Content-Type: text/event-stream or fail the request."
+        },
+        "data": { "$ref": "#/definitions/feed_document" }
+      }
+    },
+    "success_response_encrypted": {
+      "type": "object",
+      "required": ["version", "success", "revision", "ttl_seconds", "encrypted", "encrypted_data"],
+      "additionalProperties": true,
+      "not": {
+        "required": ["data"]
+      },
+      "properties": {
+        "version": {
+          "type": "string",
+          "const": "wg-feed-00"
+        },
+        "success": {
+          "type": "boolean",
+          "const": true
+        },
+        "revision": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Opaque success-response revision identifier. Servers MUST set the HTTP ETag to exactly this same value."
+        },
+        "ttl_seconds": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "Suggested refresh interval"
+        },
+        "supports_sse": {
+          "type": "boolean",
+          "default": false,
+          "description": "Server capability declaration. If true, the server MUST support SSE for this Subscription URL when the client sends Accept: text/event-stream, and MUST respond with Content-Type: text/event-stream or fail the request."
+        },
+        "encrypted": {
+          "type": "boolean",
+          "const": true
+        },
+        "encrypted_data": {
+          "type": "string",
+          "minLength": 1,
+          "description": "ASCII-armored age payload of the UTF-8 JSON Feed Document (see docs/draft-wg-feed-00.md)."
+        }
+      }
+    },
+    "error_response": {
+      "type": "object",
+      "required": ["version", "success", "message", "retriable"],
+      "additionalProperties": true,
+      "properties": {
+        "version": {
+          "type": "string",
+          "const": "wg-feed-00"
+        },
+        "success": {
+          "type": "boolean",
+          "const": false
+        },
+        "message": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Human-oriented, user-defined error message."
+        },
+        "retriable": {
+          "type": "boolean",
+          "description": "Whether the error is retriable for this endpoint. If false, clients SHOULD try other endpoints for the same subscription entry if available; clients MUST only enter a terminal condition once all reachable endpoints return retriable=false (see docs/draft-wg-feed-00.md)."
+        }
+      }
+    },
+    "feed_document": {
+      "type": "object",
+      "required": ["id", "endpoints", "display_info", "tunnels"],
+      "additionalProperties": true,
+      "properties": {
+        "id": {
+          "type": "string",
+          "description": "Feed ID (UUID). Used to detect duplicate subscriptions.",
+          "pattern": "^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}$"
+        },
+        "endpoints": {
+          "type": "array",
+          "minItems": 1,
+          "uniqueItems": true,
+          "items": {
+            "type": "string",
+            "pattern": "^https://[^#]+$"
+          },
+          "description": "List of HTTPS subscription URLs where this feed can be fetched. Items MUST NOT include URL fragments (#). Clients treat all items as equal and randomize before use."
+        },
+        "warning_message": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Human-oriented warning message to be shown to the user when present (e.g., subscription expired but still reachable)."
+        },
+        "display_info": {
+          "$ref": "#/definitions/display_info"
+        },
+        "tunnels": {
+          "type": "array",
+          "items": { "$ref": "#/definitions/tunnel" }
+        }
+      }
+    },
+    "display_info": {
+      "type": "object",
+      "additionalProperties": true,
+      "required": ["title"],
+      "properties": {
+        "title": {
+          "type": "string",
+          "minLength": 1
+        },
+        "description": {
+          "type": "string"
+        },
+        "icon_url": {
+          "type": "string",
+          "pattern": "^data:[iI][mM][aA][gG][eE]/[sS][vV][gG]\\+[xX][mM][lL](?:;[^,]*)?,.*$",
+          "description": "Optional icon reference. Must be a data: URL (RFC 2397) with media type image/svg+xml (commonly base64-encoded)."
+        }
+      }
+    },
+    "tunnel": {
+      "type": "object",
+      "additionalProperties": true,
+      "required": ["id", "name", "display_info", "wg_quick_config"],
+      "properties": {
+        "id": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Stable opaque identifier (unique within the feed). Clients must treat the same id from different feeds as distinct tunnels."
+        },
+        "name": {
+          "type": "string",
+          "minLength": 1,
+          "pattern": "^[A-Za-z][A-Za-z0-9-]*$",
+          "description": "Suggested interface/profile name (slug). Must start with a letter and contain only letters, digits, and dashes. Clients may truncate or adjust for uniqueness."
+        },
+        "display_info": {
+          "$ref": "#/definitions/display_info"
+        },
+        "enabled": {
+          "type": "boolean",
+          "default": false,
+          "description": "Suggested enabled/disabled value. If forced=false, this only defines the initial default for newly created/imported tunnels; later changes from the feed must be ignored. If forced=true, clients enforce this value unless the user has enabled 'ignore server state'."
+        },
+        "forced": {
+          "type": "boolean",
+          "default": false,
+          "description": "Whether the server enforces the enabled/disabled state. If true (and 'ignore server state' is not enabled), clients must forbid user toggling and enforce 'enabled'."
+        },
+        "wg_quick_config": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Raw wg-quick config text. Treated as opaque; may contain non-standard keys used by particular clients (e.g., Android/AmneziaWG) and may also include sensitive material such as PrivateKey/PresharedKey."
+        }
+      }
+    }
+  }
+}
