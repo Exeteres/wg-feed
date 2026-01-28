@@ -246,10 +246,11 @@ Requirements:
 - Items in `endpoints[]` MUST NOT include a URL fragment (the portion after `#`). In particular, `endpoints[]` MUST NOT include an age encryption key fragment.
 
 Client behavior:
-- Clients MUST treat all Subscription URLs as equal.
-- Before selecting a Subscription URL for use, clients MUST randomize the list order.
+- Clients MUST treat all Subscription URLs as equivalent inputs (i.e., servers MUST NOT assume clients will pick a specific URL).
+- Clients MUST attempt endpoints one-by-one until a successful sync occurs (Section 2.2) or all endpoints have been tried.
+- Clients SHOULD prefer Subscription URLs that have recently succeeded for this subscription entry on previous syncs.
 
-When attempting to sync using endpoints, clients MUST use the first endpoint in the randomized list and fall back to subsequent endpoints when:
+When attempting to sync using endpoints, clients MUST use the first endpoint in their chosen order and fall back to subsequent endpoints when:
 - The request fails without producing a valid wg-feed JSON error response (Section 3.4) (e.g., connection error, timeout, TLS failure, proxy/HTML error body), or
 - A valid wg-feed JSON error response is received with `retriable = true`.
 
@@ -260,11 +261,11 @@ Clients MUST only enter the terminal condition state (Section 3.4.1) due to `ret
 Clients MAY additionally enter the terminal condition state (Section 3.4.1) according to local policy after a reasonable number of consecutive unsuccessful attempts to successfully sync using any Subscription URL.
 
 Polling:
-- For each poll attempt, clients MUST attempt to sync using the endpoints in randomized order until a successful sync occurs (Section 2.2) or all endpoints have been tried.
+- For each poll attempt, clients MUST attempt to sync using the endpoints one-by-one until a successful sync occurs (Section 2.2) or all endpoints have been tried.
 
 SSE:
-- When using SSE, clients MUST connect to one Subscription URL selected from the randomized list.
-- If an established SSE connection fails for a retriable reason (e.g., network error, unexpected disconnect), clients SHOULD connect to the next Subscription URL in the randomized list.
+- When using SSE, clients MUST connect to one Subscription URL.
+- If an established SSE connection fails for a retriable reason (e.g., network error, unexpected disconnect), clients SHOULD connect to the next Subscription URL.
 
 Server behavior:
 - Servers SHOULD include the current Subscription URL they are serving in `endpoints[]`.

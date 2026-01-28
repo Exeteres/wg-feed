@@ -8,10 +8,10 @@ import (
 )
 
 type State struct {
-	// SetupURLSalt is a per-installation random salt used to hash Setup URLs
-	// (without storing them) into keys for SetupURLMap.
-	SetupURLSalt string            `json:"setup_url_salt,omitempty"`
-	SetupURLMap  map[string]string `json:"setup_url_map,omitempty"` // hashed canonical setup url (no fragment) -> feed id
+	// SubscriptionURLSalt is a per-installation random salt used to hash subscription-related URLs
+	// (without storing them) into stable keys.
+	SubscriptionURLSalt string            `json:"subscription_url_salt,omitempty"`
+	SetupURLMap         map[string]string `json:"setup_url_map,omitempty"` // hashed canonical setup url (no fragment) -> feed id
 
 	Feeds map[string]FeedState `json:"feeds"`
 }
@@ -21,6 +21,7 @@ type FeedState struct {
 	LastReconciledRevision string                 `json:"last_reconciled_revision,omitempty"`
 	TTLSeconds             *int                   `json:"ttl_seconds,omitempty"`
 	CachedEncryptedData    string                 `json:"cached_encrypted_data,omitempty"`
+	EndpointOrder          []string               `json:"endpoint_order,omitempty"` // salted hashes; preferred endpoints first
 	Tunnels                map[string]TunnelState `json:"tunnels"`
 }
 

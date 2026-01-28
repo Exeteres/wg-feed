@@ -194,7 +194,7 @@ func (d *daemon) resolveFromStateCache(setupURL string) (string, []string, error
 	var feedID string
 	var endpoints []string
 	err := d.withStateSave(func(st *state.State) error {
-		key, err := st.SetupURLKey(setupURL)
+		key, err := st.SubscriptionURLKey(setupURL)
 		if err != nil {
 			return err
 		}
@@ -213,12 +213,13 @@ func (d *daemon) resolveFromStateCache(setupURL string) (string, []string, error
 		if err != nil {
 			return err
 		}
-		endpoints = doc.Endpoints
+		endpoints = st.OrderEndpoints(feedID, doc.Endpoints)
 		// If the cached doc ID doesn't match, prefer the cached doc and update the mapping.
 		cachedID := strings.TrimSpace(doc.ID)
 		if cachedID != "" && cachedID != feedID {
 			st.SetupURLMap[key] = cachedID
 			feedID = cachedID
+			endpoints = st.OrderEndpoints(feedID, doc.Endpoints)
 		}
 		return nil
 	})
@@ -260,10 +261,30 @@ func (d *daemon) withStateSave(fn func(st *state.State) error) error {
 	return errFn
 }
 
+func (d *daemon) withStateRead(fn func(st state.State) error) error {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+
+	st, err := state.Load(d.cfg.StatePath)
+	if err != nil {
+		return err
+	}
+	return fn(st)
+}
+
 func (d *daemon) pollLoop(ctx context.Context, setupURL string, feedID *string, endpoints *[]string, lastRevision *string, lastTTL **int, nextCacheReconcile *time.Time) error {
 	for {
 		if ctx.Err() != nil {
 			return ctx.Err()
+		}
+
+		// Prefer endpoints that previously worked (persisted as salted hashes in state).
+		if strings.TrimSpace(*feedID) != "" {
+			_ = d.withStateRead(func(st state.State) error {
+				ordered := st.OrderEndpoints(strings.TrimSpace(*feedID), *endpoints)
+				*endpoints = ordered
+				return nil
+			})
 		}
 
 		res, usedEndpoint, err := feed.FetchAnyEndpoints(ctx, *endpoints, setupURL, strings.TrimSpace(*lastRevision))
@@ -372,7 +393,7 @@ func (d *daemon) applyRemoteUpdate(ctx context.Context, requestURL string, setup
 		d.logger.Printf("feed warning: feed=%q message=%q", feed.RedactURL(setupURL), msg)
 	}
 	return d.withStateSave(func(st *state.State) error {
-		key, err := st.SetupURLKey(setupURL)
+		key, err := st.SubscriptionURLKey(setupURL)
 		if err != nil {
 			return err
 		}
@@ -382,6 +403,11 @@ func (d *daemon) applyRemoteUpdate(ctx context.Context, requestURL string, setup
 		if fs.Tunnels == nil {
 			fs.Tunnels = map[string]state.TunnelState{}
 		}
+
+		// Update endpoint preference order by promoting the endpoint that successfully produced this update.
+		st.ReconcileEndpointOrder(feedID, doc.Endpoints, requestURL)
+		fs = st.Feeds[feedID]
+
 		v := ttl
 		fs.TTLSeconds = &v
 		fs.CachedEncryptedData = strings.TrimSpace(cachedEncryptedData)

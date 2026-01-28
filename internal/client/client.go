@@ -41,19 +41,21 @@ func applyOne(ctx context.Context, cfg config.Config, b backend.Backend, st *sta
 	setupURL = strings.TrimSpace(setupURL)
 
 	// Prefer endpoints learned from cached encrypted_data before attempting a bootstrap fetch.
-	key, err := st.SetupURLKey(setupURL)
+	key, err := st.SubscriptionURLKey(setupURL)
 	if err != nil {
 		return fmt.Errorf("feed %s: %w", feed.RedactURL(setupURL), err)
 	}
 	var endpoints []string
+	var cachedFeedID string
 	if feedID := strings.TrimSpace(st.SetupURLMap[key]); feedID != "" {
+		cachedFeedID = feedID
 		if fs, ok := st.Feeds[feedID]; ok {
 			if strings.TrimSpace(fs.CachedEncryptedData) != "" {
 				doc, err := feed.DecryptFeedDocumentForSetupURL(setupURL, fs.CachedEncryptedData)
 				if err != nil {
 					return fmt.Errorf("feed %s: %w", feed.RedactURL(setupURL), err)
 				}
-				endpoints = doc.Endpoints
+				endpoints = st.OrderEndpoints(feedID, doc.Endpoints)
 			}
 		}
 	}
@@ -62,11 +64,15 @@ func applyOne(ctx context.Context, cfg config.Config, b backend.Backend, st *sta
 	// If endpoints are known, do not use the Setup URL for network requests.
 	var res feed.FetchResult
 	if len(endpoints) != 0 {
-		fetched, _, err := feed.FetchAnyEndpoints(ctx, endpoints, setupURL, "")
+		fetched, usedEndpoint, err := feed.FetchAnyEndpoints(ctx, endpoints, setupURL, "")
 		if err != nil {
 			return fmt.Errorf("feed %s: %w", feed.RedactURL(setupURL), err)
 		}
 		res = fetched
+		// Best-effort: record endpoint preference for next sync.
+		if strings.TrimSpace(cachedFeedID) != "" {
+			st.ReconcileEndpointOrder(cachedFeedID, res.Feed.Endpoints, usedEndpoint)
+		}
 	} else {
 		fetched, err := feed.FetchWithDecryptURL(ctx, setupURL, setupURL, "")
 		if err != nil {

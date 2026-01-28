@@ -2,29 +2,23 @@ package feed
 
 import (
 	"context"
-	"crypto/rand"
 	"fmt"
-	"math/big"
 	"strings"
 )
 
-func randomizedCopy(endpoints []string) []string {
+func normalizeEndpoints(endpoints []string) []string {
 	out := make([]string, 0, len(endpoints))
+	seen := map[string]struct{}{}
 	for _, e := range endpoints {
 		e = strings.TrimSpace(e)
 		if e == "" {
 			continue
 		}
-		out = append(out, e)
-	}
-	// Fisher-Yates with crypto/rand.
-	for i := len(out) - 1; i > 0; i-- {
-		jBig, err := rand.Int(rand.Reader, big.NewInt(int64(i+1)))
-		if err != nil {
-			break
+		if _, ok := seen[e]; ok {
+			continue
 		}
-		j := int(jBig.Int64())
-		out[i], out[j] = out[j], out[i]
+		seen[e] = struct{}{}
+		out = append(out, e)
 	}
 	return out
 }
@@ -65,10 +59,10 @@ func FetchWithDecryptURL(ctx context.Context, requestURL, decryptURL string, ifN
 	return res, nil
 }
 
-// FetchAnyEndpoints attempts to fetch a feed from endpoints[] in randomized order.
+// FetchAnyEndpoints attempts to fetch a feed from endpoints[] in the given order.
 // It returns the first successful result plus the endpoint URL that succeeded.
 func FetchAnyEndpoints(ctx context.Context, endpoints []string, decryptURL string, ifNoneMatchRevision string) (FetchResult, string, error) {
-	order := randomizedCopy(endpoints)
+	order := normalizeEndpoints(endpoints)
 	if len(order) == 0 {
 		return FetchResult{}, "", fmt.Errorf("no endpoints")
 	}
@@ -104,10 +98,10 @@ func FetchAnyEndpoints(ctx context.Context, endpoints []string, decryptURL strin
 	return FetchResult{}, "", fmt.Errorf("all endpoints failed")
 }
 
-// StreamSSEAnyEndpoints attempts to open an SSE stream from endpoints[] in randomized order.
+// StreamSSEAnyEndpoints attempts to open an SSE stream from endpoints[] in the given order.
 // If a stream fails for a retriable reason, it tries the next endpoint.
 func StreamSSEAnyEndpoints(ctx context.Context, endpoints []string, onEvent func(endpoint string, data []byte) error) error {
-	order := randomizedCopy(endpoints)
+	order := normalizeEndpoints(endpoints)
 	if len(order) == 0 {
 		return fmt.Errorf("no endpoints")
 	}

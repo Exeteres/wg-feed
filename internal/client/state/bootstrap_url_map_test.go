@@ -7,7 +7,7 @@ import (
 )
 
 func TestCanonicalSetupURLNoFragment_DropsFragmentAndNormalizes(t *testing.T) {
-	got, err := CanonicalSetupURLNoFragment("HTTPS://EXAMPLE.COM:443/path?x=1#1kyhr0slrn9cdp6q")
+	got, err := CanonicalSubscriptionURLNoFragment("HTTPS://EXAMPLE.COM:443/path?x=1#1kyhr0slrn9cdp6q")
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -17,21 +17,21 @@ func TestCanonicalSetupURLNoFragment_DropsFragmentAndNormalizes(t *testing.T) {
 	}
 }
 
-func TestSetupURLKey_StableAndIgnoresFragment(t *testing.T) {
+func TestSubscriptionURLKey_StableAndIgnoresFragment(t *testing.T) {
 	salt := make([]byte, 32)
 	for i := range salt {
 		salt[i] = byte(i)
 	}
-	st := &State{SetupURLSalt: hex.EncodeToString(salt)}
+	st := &State{SubscriptionURLSalt: hex.EncodeToString(salt)}
 
 	u1 := "https://example.com/sub?id=123#aaa"
 	u2 := "https://example.com/sub?id=123#bbb"
 
-	k1, err := st.SetupURLKey(u1)
+	k1, err := st.SubscriptionURLKey(u1)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	k2, err := st.SetupURLKey(u2)
+	k2, err := st.SubscriptionURLKey(u2)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -43,19 +43,19 @@ func TestSetupURLKey_StableAndIgnoresFragment(t *testing.T) {
 	}
 }
 
-func TestSetupURLKey_GeneratesSalt(t *testing.T) {
+func TestSubscriptionURLKey_GeneratesSalt(t *testing.T) {
 	st := &State{}
-	k1, err := st.SetupURLKey("https://example.com/sub#abc")
+	k1, err := st.SubscriptionURLKey("https://example.com/sub#abc")
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	if strings.TrimSpace(st.SetupURLSalt) == "" {
+	if strings.TrimSpace(st.SubscriptionURLSalt) == "" {
 		t.Fatalf("expected salt to be generated")
 	}
-	if _, err := hex.DecodeString(st.SetupURLSalt); err != nil {
+	if _, err := hex.DecodeString(st.SubscriptionURLSalt); err != nil {
 		t.Fatalf("expected hex salt: %v", err)
 	}
-	k2, err := st.SetupURLKey("https://example.com/sub#different")
+	k2, err := st.SubscriptionURLKey("https://example.com/sub#different")
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}

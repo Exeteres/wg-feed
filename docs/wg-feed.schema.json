@@ -136,7 +136,7 @@
             "type": "string",
             "pattern": "^https://[^#]+$"
           },
-          "description": "List of HTTPS subscription URLs where this feed can be fetched. Items MUST NOT include URL fragments (#). Clients treat all items as equal and randomize before use."
+          "description": "List of HTTPS subscription URLs where this feed can be fetched. Items MUST NOT include URL fragments (#). Clients should try endpoints one-by-one and prefer endpoints that worked previously for this subscription entry."
         },
         "warning_message": {
           "type": "string",

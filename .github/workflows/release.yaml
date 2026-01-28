@@ -48,12 +48,13 @@ jobs:
         uses: nosovj/llm-release-action@v1
         id: release
         with:
-          model: gemini/gemini-2.5-flash
+          model: github/Llama-3.3-70B-Instruct
+          context_files: README.md
           changelog_config: |
             default:
               preset: developer
         env:
-          GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+          GITHUB_API_KEY: ${{ secrets.GH_MODELS_TOKEN }}
 
       - name: Build and push wg-feed-server
         uses: docker/build-push-action@v6
