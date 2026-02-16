@@ -16,7 +16,9 @@ import (
 type fakeRunner struct {
 	calls []string
 
-	wgShowErr error
+	wgShowErr        error
+	wgShowconfStdout string
+	wgShowconfErr    error
 
 	stripStdout string
 	stripErr    error
@@ -41,6 +43,12 @@ func (r *fakeRunner) Run(_ context.Context, name string, args ...string) (execx.
 				return execx.Result{}, r.wgShowErr
 			}
 			return execx.Result{}, nil
+		}
+		if len(args) >= 2 && args[0] == "showconf" {
+			if r.wgShowconfErr != nil {
+				return execx.Result{}, r.wgShowconfErr
+			}
+			return execx.Result{Stdout: r.wgShowconfStdout}, nil
 		}
 		if len(args) >= 3 && args[0] == "syncconf" {
 			if r.syncconfErr != nil {
@@ -146,6 +154,125 @@ func TestApply_Enabled_InterfaceUp_DeviceUpdateUsesSyncconf_NoDownUp(t *testing.
 	}
 	if strings.Contains(joined, "wg-quick down amsterdam-2") || strings.Contains(joined, "wg-quick up ") {
 		t.Fatalf("did not expect wg-quick down/up on successful device update; got:\n%s", joined)
+	}
+}
+
+func TestApply_Enabled_InterfaceUp_DeviceUpdate_ReconcilesAllowedIPRoutes(t *testing.T) {
+	r := &fakeRunner{
+		wgShowconfStdout: "[Interface]\nPrivateKey = x\n\n[Peer]\nPublicKey = pub1\nAllowedIPs = 10.0.0.0/24, 192.168.0.0/16\n",
+		stripStdout:      "[Interface]\nPrivateKey = x\n\n[Peer]\nPublicKey = pub1\nAllowedIPs = 10.0.0.0/24, 2001:db8::/64\n",
+	}
+	logger := log.New(io.Discard, "", 0)
+	b := New(r, logger)
+
+	cfg := "[Interface]\nPrivateKey = x\n"
+	if err := b.Apply(context.Background(), "amsterdam-2", cfg, true); err != nil {
+		t.Fatalf("Apply error: %v", err)
+	}
+
+	joined := strings.Join(r.calls, "\n")
+	if !strings.Contains(joined, "wg showconf amsterdam-2") {
+		t.Fatalf("expected wg showconf; got:\n%s", joined)
+	}
+	if !strings.Contains(joined, "ip -6 route replace 2001:db8::/64 dev amsterdam-2") {
+		t.Fatalf("expected ipv6 route replace; got:\n%s", joined)
+	}
+	if !strings.Contains(joined, "ip -4 route del 192.168.0.0/16 dev amsterdam-2") {
+		t.Fatalf("expected ipv4 route del; got:\n%s", joined)
+	}
+	if strings.Contains(joined, "wg-quick down amsterdam-2") || strings.Contains(joined, "wg-quick up ") {
+		t.Fatalf("did not expect wg-quick down/up on successful device update; got:\n%s", joined)
+	}
+}
+
+func TestApply_Enabled_InterfaceUp_DeviceUpdate_ReconcilesAllowedIPRoutes_MultiplePeers(t *testing.T) {
+	r := &fakeRunner{
+		wgShowconfStdout: "[Interface]\nPrivateKey = x\n\n[Peer]\nPublicKey = pub1\nAllowedIPs = 10.0.0.0/24\n\n[Peer]\nPublicKey = pub2\nAllowedIPs = 10.1.0.0/24, 2001:db8:1::/64\n",
+		stripStdout:      "[Interface]\nPrivateKey = x\n\n[Peer]\nPublicKey = pub1\nAllowedIPs = 10.0.0.0/24\n\n[Peer]\nPublicKey = pub3\nAllowedIPs = 10.2.0.0/24\n",
+	}
+	logger := log.New(io.Discard, "", 0)
+	b := New(r, logger)
+
+	cfg := "[Interface]\nPrivateKey = x\n"
+	if err := b.Apply(context.Background(), "amsterdam-2", cfg, true); err != nil {
+		t.Fatalf("Apply error: %v", err)
+	}
+
+	joined := strings.Join(r.calls, "\n")
+	if !strings.Contains(joined, "wg showconf amsterdam-2") {
+		t.Fatalf("expected wg showconf; got:\n%s", joined)
+	}
+	if !strings.Contains(joined, "ip -4 route replace 10.2.0.0/24 dev amsterdam-2") {
+		t.Fatalf("expected ipv4 route replace for new peer; got:\n%s", joined)
+	}
+	if !strings.Contains(joined, "ip -4 route del 10.1.0.0/24 dev amsterdam-2") {
+		t.Fatalf("expected ipv4 route del for removed peer; got:\n%s", joined)
+	}
+	if !strings.Contains(joined, "ip -6 route del 2001:db8:1::/64 dev amsterdam-2") {
+		t.Fatalf("expected ipv6 route del for removed peer; got:\n%s", joined)
+	}
+}
+
+func TestApply_Enabled_InterfaceUp_DeviceUpdate_ReconcilesAllowedIPRoutes_DedupAcrossPeers(t *testing.T) {
+	r := &fakeRunner{
+		wgShowconfStdout: "[Interface]\nPrivateKey = x\n\n[Peer]\nPublicKey = pub1\nAllowedIPs = 10.0.0.0/24\n\n[Peer]\nPublicKey = pub2\nAllowedIPs = 10.0.0.0/24\n",
+		stripStdout:      "[Interface]\nPrivateKey = x\n\n[Peer]\nPublicKey = pub1\nAllowedIPs = 10.0.0.0/24\n",
+	}
+	logger := log.New(io.Discard, "", 0)
+	b := New(r, logger)
+
+	cfg := "[Interface]\nPrivateKey = x\n"
+	if err := b.Apply(context.Background(), "amsterdam-2", cfg, true); err != nil {
+		t.Fatalf("Apply error: %v", err)
+	}
+
+	joined := strings.Join(r.calls, "\n")
+	if strings.Contains(joined, "ip -4 route del 10.0.0.0/24 dev amsterdam-2") {
+		t.Fatalf("did not expect route deletion for prefix still present; got:\n%s", joined)
+	}
+}
+
+func TestApply_Enabled_InterfaceUp_DeviceUpdate_ReconcilesAllowedIPRoutes_PeerAdded(t *testing.T) {
+	r := &fakeRunner{
+		wgShowconfStdout: "[Interface]\nPrivateKey = x\n",
+		stripStdout:      "[Interface]\nPrivateKey = x\n\n[Peer]\nPublicKey = pub1\nAllowedIPs = 10.9.0.0/24\n",
+	}
+	logger := log.New(io.Discard, "", 0)
+	b := New(r, logger)
+
+	cfg := "[Interface]\nPrivateKey = x\n"
+	if err := b.Apply(context.Background(), "amsterdam-2", cfg, true); err != nil {
+		t.Fatalf("Apply error: %v", err)
+	}
+
+	joined := strings.Join(r.calls, "\n")
+	if !strings.Contains(joined, "ip -4 route replace 10.9.0.0/24 dev amsterdam-2") {
+		t.Fatalf("expected ipv4 route replace for added peer; got:\n%s", joined)
+	}
+	if strings.Contains(joined, "ip -4 route del") || strings.Contains(joined, "ip -6 route del") {
+		t.Fatalf("did not expect any route deletions on pure addition; got:\n%s", joined)
+	}
+}
+
+func TestApply_Enabled_InterfaceUp_DeviceUpdate_ReconcilesAllowedIPRoutes_PeerRemoved(t *testing.T) {
+	r := &fakeRunner{
+		wgShowconfStdout: "[Interface]\nPrivateKey = x\n\n[Peer]\nPublicKey = pub1\nAllowedIPs = 10.9.0.0/24, 2001:db8:9::/64\n",
+		stripStdout:      "[Interface]\nPrivateKey = x\n",
+	}
+	logger := log.New(io.Discard, "", 0)
+	b := New(r, logger)
+
+	cfg := "[Interface]\nPrivateKey = x\n"
+	if err := b.Apply(context.Background(), "amsterdam-2", cfg, true); err != nil {
+		t.Fatalf("Apply error: %v", err)
+	}
+
+	joined := strings.Join(r.calls, "\n")
+	if !strings.Contains(joined, "ip -4 route del 10.9.0.0/24 dev amsterdam-2") {
+		t.Fatalf("expected ipv4 route del for removed peer; got:\n%s", joined)
+	}
+	if !strings.Contains(joined, "ip -6 route del 2001:db8:9::/64 dev amsterdam-2") {
+		t.Fatalf("expected ipv6 route del for removed peer; got:\n%s", joined)
 	}
 }
 
