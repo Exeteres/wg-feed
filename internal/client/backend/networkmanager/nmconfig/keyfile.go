@@ -2,6 +2,7 @@ package nmconfig
 
 import (
 	"bytes"
+	"fmt"
 	"strings"
 
 	"gopkg.in/ini.v1"
@@ -20,6 +21,9 @@ func Parse(b []byte) (*File, error) {
 		// NetworkManager keyfiles are INI-ish; be permissive.
 		SkipUnrecognizableLines: true,
 		AllowBooleanKeys:        true,
+		// NM keyfiles use ';' as a list delimiter for many values (e.g. allowed-ips).
+		// Treating ';' as an inline comment would truncate values when reloading.
+		IgnoreInlineComment: true,
 	}
 
 	f, err := ini.LoadSources(opt, b)
@@ -33,6 +37,7 @@ func NewEmpty() *File {
 	opt := ini.LoadOptions{
 		SkipUnrecognizableLines: true,
 		AllowBooleanKeys:        true,
+		IgnoreInlineComment:     true,
 	}
 	return &File{f: ini.Empty(opt)}
 }
@@ -75,10 +80,27 @@ func (f *File) RemoveSectionsWithPrefix(prefix string) {
 }
 
 func (f *File) Bytes() []byte {
+	// NetworkManager uses GLib keyfile syntax, which is INI-like but does not accept
+	// gopkg.in/ini.v1's backtick-quoting for values that contain ';' or '#'.
+	// Serialize ourselves to preserve raw values (notably semicolon-delimited lists).
 	var buf bytes.Buffer
-	_, _ = f.f.WriteTo(&buf)
+	for _, sec := range f.f.Sections() {
+		name := sec.Name()
+		if name == ini.DefaultSection || strings.TrimSpace(name) == "" {
+			continue
+		}
+		_, _ = fmt.Fprintf(&buf, "[%s]\n", name)
+		for _, k := range sec.Keys() {
+			_, _ = fmt.Fprintf(&buf, "%s=%s\n", k.Name(), k.Value())
+		}
+		_ = buf.WriteByte('\n')
+	}
+
 	b := buf.Bytes()
-	if len(b) == 0 || b[len(b)-1] != '\n' {
+	if len(b) == 0 {
+		return []byte("\n")
+	}
+	if b[len(b)-1] != '\n' {
 		b = append(b, '\n')
 	}
 	return b

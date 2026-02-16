@@ -30,10 +30,11 @@ type applyCall struct {
 	Name    string
 	Config  string
 	Enabled bool
+	Forced  bool
 }
 
-func (b *fakeBackend) Apply(_ context.Context, name string, wgQuickConfig string, enabled bool) error {
-	b.applyCalls = append(b.applyCalls, applyCall{Name: name, Config: wgQuickConfig, Enabled: enabled})
+func (b *fakeBackend) Apply(_ context.Context, name string, wgQuickConfig string, enabled bool, forced bool) error {
+	b.applyCalls = append(b.applyCalls, applyCall{Name: name, Config: wgQuickConfig, Enabled: enabled, Forced: forced})
 	return b.applyErr
 }
 
@@ -214,6 +215,99 @@ func TestMaybeReconcileFromCache_WithEncryptedCache_Applies(t *testing.T) {
 	}
 	if len(b.applyCalls) != 1 {
 		t.Fatalf("expected 1 apply call got %d", len(b.applyCalls))
+	}
+}
+
+func TestReconcileFromCacheOnStart_WithEncryptedCache_Applies(t *testing.T) {
+	t.Parallel()
+
+	ctx := context.Background()
+	statePath := filepath.Join(t.TempDir(), "state.json")
+
+	id, err := age.GenerateX25519Identity()
+	if err != nil {
+		t.Fatalf("GenerateX25519Identity: %v", err)
+	}
+	fragment := strings.ToLower(strings.TrimPrefix(id.String(), "AGE-SECRET-KEY-"))
+	setupURL := "https://example.test/feed#" + fragment
+	feedID := "11111111-1111-4111-8111-111111111111"
+
+	doc := model.FeedDocument{
+		ID:          feedID,
+		Endpoints:   []string{"https://example.test/feed"},
+		DisplayInfo: model.DisplayInfo{Title: "Example"},
+		Tunnels: []model.Tunnel{{
+			ID:            "t1",
+			Name:          "home",
+			DisplayInfo:   model.DisplayInfo{Title: "Home"},
+			Enabled:       true,
+			Forced:        true,
+			WGQuickConfig: "[Interface]\nPrivateKey = x\n\n[Peer]\nPublicKey = y\nAllowedIPs = 0.0.0.0/0\n",
+		}},
+	}
+
+	pt, err := json.Marshal(doc)
+	if err != nil {
+		t.Fatalf("Marshal: %v", err)
+	}
+	var buf bytes.Buffer
+	aw := armor.NewWriter(&buf)
+	w, err := age.Encrypt(aw, id.Recipient())
+	if err != nil {
+		_ = aw.Close()
+		t.Fatalf("Encrypt: %v", err)
+	}
+	if _, err := w.Write(pt); err != nil {
+		_ = w.Close()
+		_ = aw.Close()
+		t.Fatalf("Write: %v", err)
+	}
+	if err := w.Close(); err != nil {
+		_ = aw.Close()
+		t.Fatalf("Close: %v", err)
+	}
+	if err := aw.Close(); err != nil {
+		t.Fatalf("ArmorClose: %v", err)
+	}
+	enc := buf.String()
+	if strings.TrimSpace(enc) == "" {
+		t.Fatalf("expected non-empty encrypted data")
+	}
+
+	st := state.State{Feeds: map[string]state.FeedState{}}
+	st.Feeds[feedID] = state.FeedState{CachedEncryptedData: enc, Tunnels: map[string]state.TunnelState{}}
+	if err := state.SaveAtomic(statePath, st); err != nil {
+		t.Fatalf("SaveAtomic: %v", err)
+	}
+
+	b := &fakeBackend{}
+	d := &daemon{cfg: config.Config{StatePath: statePath}, b: b, logger: log.New(io.Discard, "", 0)}
+
+	if err := d.reconcileFromCacheOnStart(ctx, setupURL, feedID); err != nil {
+		t.Fatalf("reconcileFromCacheOnStart: %v", err)
+	}
+	if len(b.applyCalls) != 1 {
+		t.Fatalf("expected 1 apply call got %d", len(b.applyCalls))
+	}
+}
+
+func TestReconcileFromCacheOnStart_NoFeedID_ReturnsError(t *testing.T) {
+	t.Parallel()
+
+	ctx := context.Background()
+	statePath := filepath.Join(t.TempDir(), "state.json")
+	if err := state.SaveAtomic(statePath, state.State{Feeds: map[string]state.FeedState{}}); err != nil {
+		t.Fatalf("SaveAtomic: %v", err)
+	}
+
+	b := &fakeBackend{}
+	d := &daemon{cfg: config.Config{StatePath: statePath}, b: b, logger: log.New(io.Discard, "", 0)}
+
+	if err := d.reconcileFromCacheOnStart(ctx, "https://example.test/feed", ""); err == nil {
+		t.Fatalf("expected error")
+	}
+	if len(b.applyCalls) != 0 {
+		t.Fatalf("expected no apply calls")
 	}
 }
 

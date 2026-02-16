@@ -147,7 +147,7 @@ func ApplyFeed(ctx context.Context, _ config.Config, b backend.Backend, st *stat
 			hadPrev = false
 		}
 
-		if err := b.Apply(ctx, t.Name, t.WGQuickConfig, enabled); err != nil {
+		if err := b.Apply(ctx, t.Name, t.WGQuickConfig, enabled, t.Forced); err != nil {
 			logger.Printf("apply failed source=%q tunnel=%q name=%q enabled=%v err=%v", feed.RedactURL(sourceURL), t.ID, t.Name, enabled, err)
 			return err
 		}

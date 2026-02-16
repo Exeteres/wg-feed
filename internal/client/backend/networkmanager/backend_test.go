@@ -7,6 +7,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/exeteres/wg-feed/internal/client/backend/networkmanager/nmconfig"
 	"github.com/exeteres/wg-feed/internal/client/execx"
 	"github.com/exeteres/wg-feed/internal/client/wgquick"
 	"gopkg.in/ini.v1"
@@ -14,10 +15,25 @@ import (
 
 type fakeRunner struct {
 	calls []string
+	errFn func(call string) error
 }
 
+type fakeExitCodeError struct {
+	code int
+	msg  string
+}
+
+func (e *fakeExitCodeError) Error() string { return e.msg }
+func (e *fakeExitCodeError) ExitCode() int { return e.code }
+
 func (r *fakeRunner) Run(_ context.Context, name string, args ...string) (execx.Result, error) {
-	r.calls = append(r.calls, name+" "+strings.Join(args, " "))
+	call := name + " " + strings.Join(args, " ")
+	r.calls = append(r.calls, call)
+	if r.errFn != nil {
+		if err := r.errFn(call); err != nil {
+			return execx.Result{}, err
+		}
+	}
 	return execx.Result{}, nil
 }
 
@@ -54,38 +70,38 @@ method=auto
 		t.Fatalf("buildNMConnection error: %v", err)
 	}
 
-	f, err := ini.Load(out)
+	f, err := nmconfig.Parse(out)
 	if err != nil {
-		t.Fatalf("ini load: %v", err)
+		t.Fatalf("nmconfig parse: %v", err)
 	}
 
-	if got := f.Section("connection").Key("uuid").String(); got != "6dd51d78-a6f0-4f58-87eb-4f1c699199af" {
+	if got, _ := f.Get("connection", "uuid"); got != "6dd51d78-a6f0-4f58-87eb-4f1c699199af" {
 		t.Fatalf("uuid not preserved: %q", got)
 	}
-	if got := f.Section("connection").Key("id").String(); got != "amsterdam-2" {
+	if got, _ := f.Get("connection", "id"); got != "amsterdam-2" {
 		t.Fatalf("id mismatch: %q", got)
 	}
-	if got := f.Section("connection").Key("interface-name").String(); got != "amsterdam-2" {
+	if got, _ := f.Get("connection", "interface-name"); got != "amsterdam-2" {
 		t.Fatalf("interface-name mismatch: %q", got)
 	}
-	if got := f.Section("wireguard").Key("mtu").String(); got != "1280" {
+	if got, _ := f.Get("wireguard", "mtu"); got != "1280" {
 		t.Fatalf("mtu mismatch: %q", got)
 	}
-	if got := f.Section("wireguard").Key("private-key").String(); got != "PRIVATEKEY" {
+	if got, _ := f.Get("wireguard", "private-key"); got != "PRIVATEKEY" {
 		t.Fatalf("private-key mismatch: %q", got)
 	}
-	if got := f.Section("wireguard-peer.PUBLICKEY").Key("allowed-ips").String(); got != "192.168.10.1;0.0.0.0/0;" {
+	if got, _ := f.Get("wireguard-peer.PUBLICKEY", "allowed-ips"); got != "192.168.10.1;0.0.0.0/0;" {
 		t.Fatalf("allowed-ips mismatch: %q", got)
 	}
-	if got := f.Section("ipv4").Key("address1").String(); got != "192.168.47.1/32" {
+	if got, _ := f.Get("ipv4", "address1"); got != "192.168.47.1/32" {
 		t.Fatalf("ipv4 address mismatch: %q", got)
 	}
-	if got := f.Section("ipv4").Key("dns").String(); got != "1.1.1.1;" {
+	if got, _ := f.Get("ipv4", "dns"); got != "1.1.1.1;" {
 		t.Fatalf("dns mismatch: %q", got)
 	}
 
 	// Ensure unrelated existing section survives.
-	if got := f.Section("proxy").Key("method").String(); got != "auto" {
+	if got, _ := f.Get("proxy", "method"); got != "auto" {
 		t.Fatalf("proxy section not preserved: %q", got)
 	}
 }
@@ -111,7 +127,7 @@ AllowedIPs = 192.168.10.1/32, 0.0.0.0/0
 	b := New(r, nil)
 	b.nmDir = nmDir
 
-	if err := b.Apply(context.Background(), "amsterdam-2", config, true); err != nil {
+	if err := b.Apply(context.Background(), "amsterdam-2", config, true, true); err != nil {
 		t.Fatalf("Apply error: %v", err)
 	}
 
@@ -141,6 +157,34 @@ AllowedIPs = 192.168.10.1/32, 0.0.0.0/0
 	}
 }
 
+func TestApply_Enabled_ForcedFalse_DoesNotAutostart(t *testing.T) {
+	tmp := t.TempDir()
+	nmDir := filepath.Join(tmp, "nm")
+
+	config := `
+[Interface]
+PrivateKey = PRIVATEKEY
+Address = 192.168.47.1/32
+
+[Peer]
+PublicKey = PUBLICKEY
+AllowedIPs = 0.0.0.0/0
+`
+
+	r := &fakeRunner{}
+	b := New(r, nil)
+	b.nmDir = nmDir
+
+	if err := b.Apply(context.Background(), "amsterdam-2", config, true, false); err != nil {
+		t.Fatalf("Apply error: %v", err)
+	}
+
+	joined := strings.Join(r.calls, "\n")
+	if strings.Contains(joined, "nmcli connection up id amsterdam-2") {
+		t.Fatalf("did not expect up call when forced=false; got:\n%s", joined)
+	}
+}
+
 func TestApply_DisabledCallsReloadAndDown(t *testing.T) {
 	tmp := t.TempDir()
 	nmDir := filepath.Join(tmp, "nm")
@@ -158,7 +202,7 @@ AllowedIPs = 0.0.0.0/0
 	b := New(r, nil)
 	b.nmDir = nmDir
 
-	if err := b.Apply(context.Background(), "amsterdam-2", config, false); err != nil {
+	if err := b.Apply(context.Background(), "amsterdam-2", config, false, true); err != nil {
 		t.Fatalf("Apply error: %v", err)
 	}
 
@@ -168,5 +212,32 @@ AllowedIPs = 0.0.0.0/0
 	}
 	if !strings.Contains(joined, "nmcli connection down id amsterdam-2") {
 		t.Fatalf("expected down call; got:\n%s", joined)
+	}
+}
+
+func TestApply_Disabled_IgnoresNotActiveConnectionError(t *testing.T) {
+	tmp := t.TempDir()
+	nmDir := filepath.Join(tmp, "nm")
+	config := `
+[Interface]
+PrivateKey = PRIVATEKEY
+Address = 192.168.47.1/32
+
+[Peer]
+PublicKey = PUBLICKEY
+AllowedIPs = 0.0.0.0/0
+`
+
+	r := &fakeRunner{errFn: func(call string) error {
+		if call == "nmcli connection down id amsterdam" {
+			return &fakeExitCodeError{code: 10, msg: "exit status 10"}
+		}
+		return nil
+	}}
+	b := New(r, nil)
+	b.nmDir = nmDir
+
+	if err := b.Apply(context.Background(), "amsterdam", config, false, true); err != nil {
+		t.Fatalf("Apply error: %v", err)
 	}
 }

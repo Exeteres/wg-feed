@@ -28,7 +28,7 @@ func New(runner Runner, logger *log.Logger) *Backend {
 	return &Backend{runner: runner, logger: logger}
 }
 
-func (b *Backend) Apply(ctx context.Context, name string, wgQuickConfig string, enabled bool) error {
+func (b *Backend) Apply(ctx context.Context, name string, wgQuickConfig string, enabled bool, forced bool) error {
 	iface := strings.TrimSpace(name)
 	if iface == "" {
 		return errors.New("wg-quick backend requires a non-empty tunnel name")

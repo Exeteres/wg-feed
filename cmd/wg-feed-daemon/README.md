@@ -36,7 +36,7 @@ Top-level shape:
 
 ```json
 {
-	"setup_url_salt": "<hex>",
+	"subscription_url_salt": "<hex>",
 	"setup_url_map": {
 		"<hmac_sha256(canonical_setup_url_no_fragment)>": "<feed_id>"
 	},
@@ -45,6 +45,7 @@ Top-level shape:
 			"last_reconciled_revision": "<revision>",
 			"ttl_seconds": 3600,
 			"cached_encrypted_data": "-----BEGIN AGE ENCRYPTED FILE-----\n...",
+			"endpoint_order": ["<hmac_sha256(canonical_endpoint_url_no_fragment)>", "..."],
 			"tunnels": {
 				"<tunnel_id>": { "name": "wg0", "enabled": true }
 			}
@@ -58,6 +59,7 @@ Notes:
 - A `feeds[<feed_id>]` entry is created only after a successful fetch/decrypt/validate (if the URL is unreachable, the daemon cannot discover the feed ID and will not create an entry).
 - If multiple Setup URLs resolve to the same `id`, the daemon ignores duplicates and logs a warning.
 - The state file never stores Setup URLs. Instead, it stores a `setup_url_map` entry keyed by a salted HMAC-SHA256 of the canonicalized Setup URL with the fragment removed.
+- The `endpoint_order` list stores salted endpoint hashes (no cleartext URLs) so the client can prefer endpoints that worked previously.
 - If `cached_encrypted_data` is present, the daemon can decrypt it using the Setup URL fragment and learn `endpoints[]` without performing a bootstrap fetch. In that case, it syncs using `endpoints[]` and does not request the Setup URL.
 - `cached_encrypted_data` is only stored when the server response is encrypted; the daemon reuses the server-provided `encrypted_data` ciphertext verbatim (it does not re-encrypt locally).
 - For unencrypted feeds, the daemon must bootstrap using the Setup URL at least once per process start to learn `endpoints[]` (endpoints are kept in memory, not persisted).

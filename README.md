@@ -30,6 +30,12 @@ The SSE and encryption features are optional.
 | [docs](docs)                             | Draft spec, JSON schema, and examples.                              |
 | [internal](internal)                     | Shared Go packages (not a public API).                              |
 
+## Nix / NixOS
+
+This repo provides a flake that builds all four binaries and a NixOS module for running `wg-feed-daemon` as a systemd service.
+
+See [nixos/README.md](nixos/README.md).
+
 ## Contributing
 
 Contributions are welcome! Please open issues or pull requests for bug reports, feature requests, or improvements. No special process is required.

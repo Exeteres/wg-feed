@@ -13,7 +13,7 @@ import (
 )
 
 type Backend interface {
-	Apply(ctx context.Context, name string, wgQuickConfig string, enabled bool) error
+	Apply(ctx context.Context, name string, wgQuickConfig string, enabled bool, forced bool) error
 	Remove(ctx context.Context, name string) error
 }
 

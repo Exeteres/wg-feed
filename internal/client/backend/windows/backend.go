@@ -20,7 +20,7 @@ func New(runner execx.Runner, logger *log.Logger) *Backend {
 	return &Backend{Runner: runner, Logger: logger}
 }
 
-func (b *Backend) Apply(ctx context.Context, name string, wgQuickConfig string, enabled bool) error {
+func (b *Backend) Apply(ctx context.Context, name string, wgQuickConfig string, enabled bool, forced bool) error {
 	name = strings.TrimSpace(name)
 	if name == "" {
 		return errors.New("windows backend requires a non-empty tunnel name")

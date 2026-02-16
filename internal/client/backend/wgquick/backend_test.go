@@ -111,7 +111,7 @@ func TestApply_Enabled_InterfaceDown_FallsBackToDownUp(t *testing.T) {
 
 	// Note: config lacks trailing newline on purpose.
 	cfg := "[Interface]\nPrivateKey = x"
-	if err := b.Apply(context.Background(), "amsterdam-2", cfg, true); err != nil {
+	if err := b.Apply(context.Background(), "amsterdam-2", cfg, true, false); err != nil {
 		t.Fatalf("Apply error: %v", err)
 	}
 	if !strings.HasSuffix(gotConfig, "\n") {
@@ -138,7 +138,7 @@ func TestApply_Enabled_InterfaceUp_DeviceUpdateUsesSyncconf_NoDownUp(t *testing.
 	b := New(r, logger)
 
 	cfg := "[Interface]\nPrivateKey = x\n"
-	if err := b.Apply(context.Background(), "amsterdam-2", cfg, true); err != nil {
+	if err := b.Apply(context.Background(), "amsterdam-2", cfg, true, false); err != nil {
 		t.Fatalf("Apply error: %v", err)
 	}
 
@@ -166,7 +166,7 @@ func TestApply_Enabled_InterfaceUp_DeviceUpdate_ReconcilesAllowedIPRoutes(t *tes
 	b := New(r, logger)
 
 	cfg := "[Interface]\nPrivateKey = x\n"
-	if err := b.Apply(context.Background(), "amsterdam-2", cfg, true); err != nil {
+	if err := b.Apply(context.Background(), "amsterdam-2", cfg, true, false); err != nil {
 		t.Fatalf("Apply error: %v", err)
 	}
 
@@ -194,7 +194,7 @@ func TestApply_Enabled_InterfaceUp_DeviceUpdate_ReconcilesAllowedIPRoutes_Multip
 	b := New(r, logger)
 
 	cfg := "[Interface]\nPrivateKey = x\n"
-	if err := b.Apply(context.Background(), "amsterdam-2", cfg, true); err != nil {
+	if err := b.Apply(context.Background(), "amsterdam-2", cfg, true, false); err != nil {
 		t.Fatalf("Apply error: %v", err)
 	}
 
@@ -222,7 +222,7 @@ func TestApply_Enabled_InterfaceUp_DeviceUpdate_ReconcilesAllowedIPRoutes_DedupA
 	b := New(r, logger)
 
 	cfg := "[Interface]\nPrivateKey = x\n"
-	if err := b.Apply(context.Background(), "amsterdam-2", cfg, true); err != nil {
+	if err := b.Apply(context.Background(), "amsterdam-2", cfg, true, false); err != nil {
 		t.Fatalf("Apply error: %v", err)
 	}
 
@@ -241,7 +241,7 @@ func TestApply_Enabled_InterfaceUp_DeviceUpdate_ReconcilesAllowedIPRoutes_PeerAd
 	b := New(r, logger)
 
 	cfg := "[Interface]\nPrivateKey = x\n"
-	if err := b.Apply(context.Background(), "amsterdam-2", cfg, true); err != nil {
+	if err := b.Apply(context.Background(), "amsterdam-2", cfg, true, false); err != nil {
 		t.Fatalf("Apply error: %v", err)
 	}
 
@@ -263,7 +263,7 @@ func TestApply_Enabled_InterfaceUp_DeviceUpdate_ReconcilesAllowedIPRoutes_PeerRe
 	b := New(r, logger)
 
 	cfg := "[Interface]\nPrivateKey = x\n"
-	if err := b.Apply(context.Background(), "amsterdam-2", cfg, true); err != nil {
+	if err := b.Apply(context.Background(), "amsterdam-2", cfg, true, false); err != nil {
 		t.Fatalf("Apply error: %v", err)
 	}
 
@@ -286,7 +286,7 @@ func TestApply_Enabled_InterfaceUp_SyncconfFails_SetconfSucceeds(t *testing.T) {
 	b := New(r, logger)
 
 	cfg := "[Interface]\nPrivateKey = x\n"
-	if err := b.Apply(context.Background(), "amsterdam-2", cfg, true); err != nil {
+	if err := b.Apply(context.Background(), "amsterdam-2", cfg, true, false); err != nil {
 		t.Fatalf("Apply error: %v", err)
 	}
 
@@ -308,7 +308,7 @@ func TestApply_Enabled_InterfaceUp_EmptyStripFallsBackToDownUp(t *testing.T) {
 	b := New(r, logger)
 
 	cfg := "[Interface]\nPrivateKey = x\n"
-	if err := b.Apply(context.Background(), "amsterdam-2", cfg, true); err != nil {
+	if err := b.Apply(context.Background(), "amsterdam-2", cfg, true, false); err != nil {
 		t.Fatalf("Apply error: %v", err)
 	}
 
@@ -327,7 +327,7 @@ func TestApply_Disabled_CallsDownOnly(t *testing.T) {
 	b := New(r, logger)
 
 	cfg := "[Interface]\nPrivateKey = x\n"
-	if err := b.Apply(context.Background(), "amsterdam-2", cfg, false); err != nil {
+	if err := b.Apply(context.Background(), "amsterdam-2", cfg, false, false); err != nil {
 		t.Fatalf("Apply error: %v", err)
 	}
 
@@ -366,7 +366,7 @@ func TestRemove_NonEmptyName_CallsDown(t *testing.T) {
 func TestApply_EmptyName_Errors(t *testing.T) {
 	r := &fakeRunner{}
 	b := New(r, log.New(io.Discard, "", 0))
-	err := b.Apply(context.Background(), " ", "[Interface]\nPrivateKey = x\n", true)
+	err := b.Apply(context.Background(), " ", "[Interface]\nPrivateKey = x\n", true, false)
 	if err == nil {
 		t.Fatalf("expected error")
 	}
@@ -387,7 +387,7 @@ func TestApply_WritesConfigInTempDir(t *testing.T) {
 		return nil
 	}
 
-	if err := b.Apply(context.Background(), "amsterdam-2", "[Interface]\nPrivateKey = x", true); err != nil {
+	if err := b.Apply(context.Background(), "amsterdam-2", "[Interface]\nPrivateKey = x", true, false); err != nil {
 		t.Fatalf("Apply error: %v", err)
 	}
 }

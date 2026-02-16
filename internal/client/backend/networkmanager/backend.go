@@ -43,7 +43,7 @@ func New(runner Runner, logger *log.Logger) *Backend {
 	}
 }
 
-func (b *Backend) Apply(ctx context.Context, name string, wgQuickConfig string, enabled bool) error {
+func (b *Backend) Apply(ctx context.Context, name string, wgQuickConfig string, enabled bool, forced bool) error {
 	if strings.TrimSpace(name) == "" {
 		return errors.New("networkmanager backend requires a non-empty connection name")
 	}
@@ -78,12 +78,31 @@ func (b *Backend) Apply(ctx context.Context, name string, wgQuickConfig string, 
 	}
 
 	_, _ = b.runner.Run(ctx, "nmcli", "connection", "reload")
+	if !forced {
+		// Respect user-managed state when forced=false: do not bring connections up or down.
+		return nil
+	}
 	if enabled {
 		_, err = b.runner.Run(ctx, "nmcli", "connection", "up", "id", name)
 		return err
 	}
 	_, err = b.runner.Run(ctx, "nmcli", "connection", "down", "id", name)
+	if err != nil && isNMCLIExitCode(err, 10) {
+		return nil
+	}
 	return err
+}
+
+func isNMCLIExitCode(err error, code int) bool {
+	if err == nil {
+		return false
+	}
+	// exec.ExitError (and compatible types) implement ExitCode().
+	var ec interface{ ExitCode() int }
+	if errors.As(err, &ec) {
+		return ec.ExitCode() == code
+	}
+	return false
 }
 
 func (b *Backend) Remove(ctx context.Context, name string) error {

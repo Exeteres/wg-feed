@@ -76,6 +76,7 @@ func (d *daemon) runFeed(ctx context.Context, setupURL string) error {
 	var lastRevision string
 	var lastTTL *int
 	var nextCacheReconcile time.Time
+	var didStartupReconcile bool
 
 	// Best-effort: resolve feedID + endpoints from cached encrypted_data before any network bootstrap.
 	resolvedID, resolvedEndpoints, err := d.resolveFromStateCache(setupURL)
@@ -90,6 +91,16 @@ func (d *daemon) runFeed(ctx context.Context, setupURL string) error {
 	}
 	if len(resolvedEndpoints) != 0 {
 		endpoints = resolvedEndpoints
+	}
+
+	// Force a reconciliation from cached encrypted data once on startup.
+	// This lets users restart the daemon to re-apply the last known-good config even if the
+	// feed endpoints are temporarily unreachable.
+	if !didStartupReconcile {
+		if err := d.reconcileFromCacheOnStart(ctx, setupURL, feedID); err == nil {
+			nextCacheReconcile = time.Now().Add(defaultReconcileTick)
+		}
+		didStartupReconcile = true
 	}
 
 	for {
@@ -243,6 +254,24 @@ func (d *daemon) claimFeedID(feedID, setupURL string) bool {
 	}
 	d.claimed[feedID] = setupURL
 	return true
+}
+
+func (d *daemon) reconcileFromCacheOnStart(ctx context.Context, setupURL string, feedID string) error {
+	feedID = strings.TrimSpace(feedID)
+	if feedID == "" {
+		return fmt.Errorf("no cached config")
+	}
+	if err := d.maybeReconcileFromCache(ctx, setupURL, feedID, time.Time{}); err != nil {
+		// Non-fatal: startup should continue even if cache reconcile isn't possible.
+		if d.logger != nil {
+			d.logger.Printf("startup cache reconcile skipped feed=%q err=%v", feed.RedactURL(setupURL), err)
+		}
+		return err
+	}
+	if d.logger != nil {
+		d.logger.Printf("startup cache reconcile applied feed=%q", feed.RedactURL(setupURL))
+	}
+	return nil
 }
 
 func (d *daemon) withStateSave(fn func(st *state.State) error) error {

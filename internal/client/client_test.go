@@ -22,10 +22,11 @@ type applyCall struct {
 	Name    string
 	Config  string
 	Enabled bool
+	Forced  bool
 }
 
-func (b *fakeBackend) Apply(_ context.Context, name string, wgQuickConfig string, enabled bool) error {
-	b.applyCalls = append(b.applyCalls, applyCall{Name: name, Config: wgQuickConfig, Enabled: enabled})
+func (b *fakeBackend) Apply(_ context.Context, name string, wgQuickConfig string, enabled bool, forced bool) error {
+	b.applyCalls = append(b.applyCalls, applyCall{Name: name, Config: wgQuickConfig, Enabled: enabled, Forced: forced})
 	return b.applyErr
 }
 
