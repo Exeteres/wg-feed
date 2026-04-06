@@ -28,7 +28,16 @@ RUN --mount=type=cache,target=/root/.cache/go-build \
 
 FROM alpine:3.20
 
-RUN apk add --no-cache ca-certificates iproute2 wireguard-tools
+RUN apk add --no-cache ca-certificates iproute2 wireguard-tools curl
+
+# Install AmneziaWG tools
+RUN curl https://github.com/amnezia-vpn/amneziawg-tools/releases/download/v1.0.20260223/alpine-3.19-amneziawg-tools.zip -L -o /tmp/amneziawg-tools.zip && \
+  unzip /tmp/amneziawg-tools.zip -d /tmp/amneziawg-tools && \
+  ls /tmp/amneziawg-tools && \
+  mv /tmp/amneziawg-tools/alpine-3.19-amneziawg-tools/awg /usr/local/bin/ && \
+  mv /tmp/amneziawg-tools/alpine-3.19-amneziawg-tools/awg-quick /usr/local/bin/ && \
+  chmod +x /usr/local/bin/awg /usr/local/bin/awg-quick && \
+  rm -rf /tmp/amneziawg-tools /tmp/amneziawg-tools.zip
 
 COPY --from=builder /out/app /usr/local/bin/app
 

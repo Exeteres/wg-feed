@@ -8,6 +8,7 @@ import (
 	"net/netip"
 	"os"
 	"path/filepath"
+	"regexp"
 	"slices"
 	"strings"
 
@@ -24,6 +25,18 @@ type Backend struct {
 	logger *log.Logger
 }
 
+type commandSet struct {
+	wg      string
+	wgQuick string
+}
+
+var (
+	defaultCommands = commandSet{wg: "wg", wgQuick: "wg-quick"}
+	amneziaCommands = commandSet{wg: "awg", wgQuick: "awg-quick"}
+
+	amneziaKeyRe = regexp.MustCompile(`(?i)^\s*(i[1-5]|s[1-4]|jc|jmin|jmax|h[1-4])\s*=`)
+)
+
 func New(runner Runner, logger *log.Logger) *Backend {
 	return &Backend{runner: runner, logger: logger}
 }
@@ -36,6 +49,7 @@ func (b *Backend) Apply(ctx context.Context, name string, wgQuickConfig string, 
 	if !strings.HasSuffix(wgQuickConfig, "\n") {
 		wgQuickConfig += "\n"
 	}
+	commands := commandSetForConfig(wgQuickConfig)
 
 	tmpDir, err := os.MkdirTemp("", "wg-feed-*")
 	if err != nil {
@@ -51,17 +65,17 @@ func (b *Backend) Apply(ctx context.Context, name string, wgQuickConfig string, 
 	}
 
 	if enabled {
-		if isUp(ctx, b.runner, iface) {
-			if ok := bestEffortDeviceUpdate(ctx, b, configPath, iface); ok {
+		if isUp(ctx, b.runner, iface, commands) {
+			if ok := bestEffortDeviceUpdate(ctx, b, configPath, iface, commands); ok {
 				return nil
 			}
 		}
 		// Fall back to wg-quick (down/up) when interface isn't up or device update fails.
-		_, _ = b.runner.Run(ctx, "wg-quick", "down", iface)
-		_, err := b.runner.Run(ctx, "wg-quick", "up", configPath)
+		_, _ = b.runner.Run(ctx, commands.wgQuick, "down", iface)
+		_, err := b.runner.Run(ctx, commands.wgQuick, "up", configPath)
 		return err
 	}
-	_, err = b.runner.Run(ctx, "wg-quick", "down", iface)
+	_, err = b.runner.Run(ctx, commands.wgQuick, "down", iface)
 	return err
 }
 
@@ -70,23 +84,44 @@ func (b *Backend) Remove(ctx context.Context, name string) error {
 	if iface == "" {
 		return nil
 	}
+	_, _ = b.runner.Run(ctx, "awg-quick", "down", iface)
 	_, _ = b.runner.Run(ctx, "wg-quick", "down", iface)
 	return nil
 }
 
-func isUp(ctx context.Context, runner Runner, iface string) bool {
-	_, err := runner.Run(ctx, "wg", "show", iface)
+func commandSetForConfig(wgQuickConfig string) commandSet {
+	if hasAmneziaExtensions(wgQuickConfig) {
+		return amneziaCommands
+	}
+	return defaultCommands
+}
+
+func hasAmneziaExtensions(wgQuickConfig string) bool {
+	for _, line := range strings.Split(wgQuickConfig, "\n") {
+		trimmed := strings.TrimSpace(line)
+		if trimmed == "" || strings.HasPrefix(trimmed, "#") || strings.HasPrefix(trimmed, ";") {
+			continue
+		}
+		if amneziaKeyRe.MatchString(trimmed) {
+			return true
+		}
+	}
+	return false
+}
+
+func isUp(ctx context.Context, runner Runner, iface string, commands commandSet) bool {
+	_, err := runner.Run(ctx, commands.wg, "show", iface)
 	return err == nil
 }
 
-func bestEffortDeviceUpdate(ctx context.Context, b *Backend, configPath string, iface string) bool {
-	oldAllowed, err := currentAllowedIPPrefixes(ctx, b.runner, iface)
+func bestEffortDeviceUpdate(ctx context.Context, b *Backend, configPath string, iface string, commands commandSet) bool {
+	oldAllowed, err := currentAllowedIPPrefixes(ctx, b.runner, iface, commands)
 	if err != nil {
 		b.logf("wg showconf failed iface=%q err=%v", iface, err)
 		oldAllowed = nil
 	}
 
-	stripRes, err := b.runner.Run(ctx, "wg-quick", "strip", configPath)
+	stripRes, err := b.runner.Run(ctx, commands.wgQuick, "strip", configPath)
 	if err != nil {
 		b.logf("wg-quick strip failed iface=%q err=%v", iface, err)
 		return false
@@ -124,7 +159,7 @@ func bestEffortDeviceUpdate(ctx context.Context, b *Backend, configPath string, 
 	}
 
 	// Prefer syncconf (removes peers not in config); fall back to setconf.
-	if _, err := b.runner.Run(ctx, "wg", "syncconf", iface, tmp); err == nil {
+	if _, err := b.runner.Run(ctx, commands.wg, "syncconf", iface, tmp); err == nil {
 		if err := reconcileAllowedIPRoutes(ctx, b, iface, oldAllowed, newAllowed); err != nil {
 			b.logf("route reconciliation failed after syncconf iface=%q err=%v", iface, err)
 			return false
@@ -133,7 +168,7 @@ func bestEffortDeviceUpdate(ctx context.Context, b *Backend, configPath string, 
 	} else {
 		b.logf("wg syncconf failed iface=%q err=%v", iface, err)
 	}
-	if _, err := b.runner.Run(ctx, "wg", "setconf", iface, tmp); err == nil {
+	if _, err := b.runner.Run(ctx, commands.wg, "setconf", iface, tmp); err == nil {
 		if err := reconcileAllowedIPRoutes(ctx, b, iface, oldAllowed, newAllowed); err != nil {
 			b.logf("route reconciliation failed after setconf iface=%q err=%v", iface, err)
 			return false
@@ -145,8 +180,8 @@ func bestEffortDeviceUpdate(ctx context.Context, b *Backend, configPath string, 
 	return false
 }
 
-func currentAllowedIPPrefixes(ctx context.Context, runner Runner, iface string) (map[netip.Prefix]struct{}, error) {
-	res, err := runner.Run(ctx, "wg", "showconf", iface)
+func currentAllowedIPPrefixes(ctx context.Context, runner Runner, iface string, commands commandSet) (map[netip.Prefix]struct{}, error) {
+	res, err := runner.Run(ctx, commands.wg, "showconf", iface)
 	if err != nil {
 		return nil, err
 	}

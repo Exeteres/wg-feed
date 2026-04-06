@@ -13,6 +13,15 @@ import (
 	"github.com/exeteres/wg-feed/internal/client/execx"
 )
 
+func hasCallPrefix(calls []string, prefix string) bool {
+	for _, c := range calls {
+		if strings.HasPrefix(c, prefix) {
+			return true
+		}
+	}
+	return false
+}
+
 type fakeRunner struct {
 	calls []string
 
@@ -26,7 +35,7 @@ type fakeRunner struct {
 	syncconfErr error
 	setconfErr  error
 
-	onWGQuickUp func(path string) error
+	onQuickUp func(path string) error
 }
 
 func (r *fakeRunner) Run(_ context.Context, name string, args ...string) (execx.Result, error) {
@@ -37,7 +46,7 @@ func (r *fakeRunner) Run(_ context.Context, name string, args ...string) (execx.
 	r.calls = append(r.calls, line)
 
 	switch name {
-	case "wg":
+	case "wg", "awg":
 		if len(args) >= 2 && args[0] == "show" {
 			if r.wgShowErr != nil {
 				return execx.Result{}, r.wgShowErr
@@ -62,7 +71,7 @@ func (r *fakeRunner) Run(_ context.Context, name string, args ...string) (execx.
 			}
 			return execx.Result{}, nil
 		}
-	case "wg-quick":
+	case "wg-quick", "awg-quick":
 		if len(args) >= 2 && args[0] == "strip" {
 			if r.stripErr != nil {
 				return execx.Result{}, r.stripErr
@@ -70,8 +79,8 @@ func (r *fakeRunner) Run(_ context.Context, name string, args ...string) (execx.
 			return execx.Result{Stdout: r.stripStdout}, nil
 		}
 		if len(args) >= 2 && args[0] == "up" {
-			if r.onWGQuickUp != nil {
-				if err := r.onWGQuickUp(args[1]); err != nil {
+			if r.onQuickUp != nil {
+				if err := r.onQuickUp(args[1]); err != nil {
 					return execx.Result{}, err
 				}
 			}
@@ -90,7 +99,7 @@ func TestApply_Enabled_InterfaceDown_FallsBackToDownUp(t *testing.T) {
 	b := New(r, logger)
 
 	var gotConfig string
-	r.onWGQuickUp = func(path string) error {
+	r.onQuickUp = func(path string) error {
 		if !strings.HasSuffix(path, "amsterdam-2.conf") {
 			t.Fatalf("expected config path to end with amsterdam-2.conf; got %q", path)
 		}
@@ -154,6 +163,80 @@ func TestApply_Enabled_InterfaceUp_DeviceUpdateUsesSyncconf_NoDownUp(t *testing.
 	}
 	if strings.Contains(joined, "wg-quick down amsterdam-2") || strings.Contains(joined, "wg-quick up ") {
 		t.Fatalf("did not expect wg-quick down/up on successful device update; got:\n%s", joined)
+	}
+}
+
+func TestApply_Enabled_WithAmneziaExtensions_UsesAWGForLiveUpdate(t *testing.T) {
+	r := &fakeRunner{
+		stripStdout: "[Interface]\nPrivateKey = x\nJc = 3\n",
+	}
+	logger := log.New(io.Discard, "", 0)
+	b := New(r, logger)
+
+	cfg := "[Interface]\nPrivateKey = x\nJc = 3\n"
+	if err := b.Apply(context.Background(), "amsterdam-2", cfg, true, false); err != nil {
+		t.Fatalf("Apply error: %v", err)
+	}
+
+	joined := strings.Join(r.calls, "\n")
+	if !strings.Contains(joined, "awg show amsterdam-2") {
+		t.Fatalf("expected awg show; got:\n%s", joined)
+	}
+	if !strings.Contains(joined, "awg-quick strip ") {
+		t.Fatalf("expected awg-quick strip; got:\n%s", joined)
+	}
+	if !strings.Contains(joined, "awg syncconf amsterdam-2 ") {
+		t.Fatalf("expected awg syncconf; got:\n%s", joined)
+	}
+	if hasCallPrefix(r.calls, "wg syncconf amsterdam-2 ") {
+		t.Fatalf("did not expect wg syncconf for amnezia config; got:\n%s", joined)
+	}
+}
+
+func TestApply_Enabled_InterfaceDown_WithAmneziaExtensions_UsesAWGQuickDownUp(t *testing.T) {
+	r := &fakeRunner{wgShowErr: errors.New("not up")}
+	b := New(r, log.New(io.Discard, "", 0))
+
+	cfg := "[Interface]\nPrivateKey = x\nS1 = aa\n"
+	if err := b.Apply(context.Background(), "amsterdam-2", cfg, true, false); err != nil {
+		t.Fatalf("Apply error: %v", err)
+	}
+
+	joined := strings.Join(r.calls, "\n")
+	if !strings.Contains(joined, "awg show amsterdam-2") {
+		t.Fatalf("expected awg show; got:\n%s", joined)
+	}
+	if !strings.Contains(joined, "awg-quick down amsterdam-2") {
+		t.Fatalf("expected awg-quick down; got:\n%s", joined)
+	}
+	if !strings.Contains(joined, "awg-quick up ") {
+		t.Fatalf("expected awg-quick up; got:\n%s", joined)
+	}
+	if hasCallPrefix(r.calls, "wg-quick up ") {
+		t.Fatalf("did not expect wg-quick up for amnezia config; got:\n%s", joined)
+	}
+}
+
+func TestApply_Enabled_InterfaceDown_WithAmneziaExtensions_NoFallbackToWGQuickOnAWGFailure(t *testing.T) {
+	r := &fakeRunner{wgShowErr: errors.New("not up")}
+	r.onQuickUp = func(path string) error {
+		_ = path
+		return errors.New("awg-quick up failed")
+	}
+	b := New(r, log.New(io.Discard, "", 0))
+
+	cfg := "[Interface]\nPrivateKey = x\nI1 = deadbeef\n"
+	err := b.Apply(context.Background(), "amsterdam-2", cfg, true, false)
+	if err == nil {
+		t.Fatalf("expected apply to fail when awg-quick up fails")
+	}
+
+	joined := strings.Join(r.calls, "\n")
+	if !strings.Contains(joined, "awg-quick up ") {
+		t.Fatalf("expected awg-quick up attempt; got:\n%s", joined)
+	}
+	if hasCallPrefix(r.calls, "wg-quick down amsterdam-2") || hasCallPrefix(r.calls, "wg-quick up ") {
+		t.Fatalf("did not expect wg-quick fallback for amnezia config; got:\n%s", joined)
 	}
 }
 
@@ -379,7 +462,7 @@ func TestApply_WritesConfigInTempDir(t *testing.T) {
 	r := &fakeRunner{wgShowErr: errors.New("down")}
 	b := New(r, log.New(io.Discard, "", 0))
 
-	r.onWGQuickUp = func(path string) error {
+	r.onQuickUp = func(path string) error {
 		// This is mainly to ensure it writes under a temp dir, not cwd.
 		if !strings.Contains(filepath.Clean(path), string(os.PathSeparator)) {
 			t.Fatalf("expected a path, got %q", path)
