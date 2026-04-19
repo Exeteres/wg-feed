@@ -141,7 +141,7 @@
         "warning_message": {
           "type": "string",
           "minLength": 1,
-          "description": "Human-oriented warning message to be shown to the user when present (e.g., subscription expired but still reachable)."
+          "description": "Human-oriented, user-defined string intended to communicate that something is wrong with the subscription."
         },
         "display_info": {
           "$ref": "#/definitions/display_info"
@@ -187,6 +187,11 @@
           "pattern": "^[A-Za-z][A-Za-z0-9-]*$",
           "description": "Suggested interface/profile name (slug). Must start with a letter and contain only letters, digits, and dashes. Clients may truncate or adjust for uniqueness."
         },
+        "warning_message": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Human-oriented, user-defined string intended to communicate that something is wrong with this tunnel without needing to trigger a full error response."
+        },
         "display_info": {
           "$ref": "#/definitions/display_info"
         },
@@ -199,6 +204,11 @@
           "type": "boolean",
           "default": false,
           "description": "Whether the server enforces the enabled/disabled state. If true (and 'ignore server state' is not enabled), clients must forbid user toggling and enforce 'enabled'."
+        },
+        "exclusive": {
+          "type": "boolean",
+          "default": false,
+          "description": "When true, the tunnel belongs to an exclusive set where only one exclusive tunnel should be active at a time. Non-exclusive tunnels are unaffected. Enforcement may depend on backend capabilities."
         },
         "wg_quick_config": {
           "type": "string",

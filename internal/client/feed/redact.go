@@ -8,7 +8,7 @@ import (
 	"strings"
 )
 
-// RedactURL returns a stable, non-secret representation of a setup URL for logs.
+// RedactURL returns a stable, non-secret representation of a subscription URL for logs.
 // It intentionally drops userinfo, path, query, and fragment.
 func RedactURL(raw string) string {
 	raw = strings.TrimSpace(raw)

@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"io"
+	"log"
 	"net/http"
 	"strings"
 	"time"
@@ -42,7 +43,11 @@ func fetchSuccessResponse(ctx context.Context, url string, ifNoneMatchRevision s
 	if err != nil {
 		return model.SuccessResponse{}, nil, false, err
 	}
-	defer resp.Body.Close()
+	defer func() {
+		if cerr := resp.Body.Close(); cerr != nil {
+			log.Printf("close response body: %v", cerr)
+		}
+	}()
 
 	switch resp.StatusCode {
 	case http.StatusNotModified:
@@ -82,7 +87,7 @@ func FetchConditional(ctx context.Context, url string, ifNoneMatchRevision strin
 
 	res := FetchResult{}
 	if sr.Encrypted {
-		doc, err := DecryptFeedDocumentForSetupURL(url, sr.EncryptedData)
+		doc, err := DecryptFeedDocumentForURL(url, sr.EncryptedData)
 		if err != nil {
 			return FetchResult{}, err
 		}

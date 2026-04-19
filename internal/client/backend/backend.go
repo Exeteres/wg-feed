@@ -1,32 +1,33 @@
 package backend
 
 import (
-	"context"
 	"fmt"
-	"log"
+	"log/slog"
 
+	"github.com/exeteres/wg-feed/internal/client/backend/netns"
 	"github.com/exeteres/wg-feed/internal/client/backend/networkmanager"
+	"github.com/exeteres/wg-feed/internal/client/backend/shared"
 	"github.com/exeteres/wg-feed/internal/client/backend/wgquick"
 	"github.com/exeteres/wg-feed/internal/client/backend/windows"
 	"github.com/exeteres/wg-feed/internal/client/config"
 	"github.com/exeteres/wg-feed/internal/client/execx"
 )
 
-type Backend interface {
-	Apply(ctx context.Context, name string, wgQuickConfig string, enabled bool, forced bool) error
-	Remove(ctx context.Context, name string) error
-}
+type Backend = shared.Backend
 
-func New(cfg config.Config, logger *log.Logger) (Backend, error) {
-	runner := execx.Runner{}
-	switch cfg.Backend {
+func NewForType(backendType config.BackendType, logger *slog.Logger) (Backend, error) {
+	runner := execx.ShellRunner{}
+	backendLogger := logger.With("backend", string(backendType))
+	switch backendType {
 	case config.BackendWGQuick:
-		return wgquick.New(runner, logger), nil
+		return wgquick.New(runner, backendLogger), nil
 	case config.BackendNetworkManager:
-		return networkmanager.New(runner, logger), nil
+		return networkmanager.New(runner, backendLogger), nil
+	case config.BackendNetNS:
+		return netns.New(runner, backendLogger), nil
 	case config.BackendWindows:
-		return windows.New(runner, logger), nil
+		return windows.New(runner, backendLogger), nil
 	default:
-		return nil, fmt.Errorf("unknown backend %q", cfg.Backend)
+		return nil, fmt.Errorf("unknown backend %q", backendType)
 	}
 }

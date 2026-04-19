@@ -2,7 +2,6 @@ package state
 
 import (
 	"crypto/hmac"
-	"crypto/rand"
 	"crypto/sha256"
 	"encoding/hex"
 	"fmt"
@@ -43,57 +42,29 @@ func CanonicalSubscriptionURLNoFragment(raw string) (string, error) {
 	return u.String(), nil
 }
 
-func (st *State) ensureSubscriptionURLSalt() ([]byte, error) {
-	if strings.TrimSpace(st.SubscriptionURLSalt) == "" {
-		b := make([]byte, 32)
-		if _, err := rand.Read(b); err != nil {
-			return nil, err
-		}
-		st.SubscriptionURLSalt = hex.EncodeToString(b)
-		return b, nil
-	}
-
-	b, err := hex.DecodeString(strings.TrimSpace(st.SubscriptionURLSalt))
-	if err != nil {
-		return nil, fmt.Errorf("invalid subscription_url_salt: %w", err)
-	}
-	if len(b) < 16 {
-		return nil, fmt.Errorf("invalid subscription_url_salt: too short")
-	}
-	return b, nil
-}
-
-// SubscriptionURLKey returns the stable, salted hash key for a URL.
+// EndpointKey returns the stable, salted hash key for a URL.
 //
 // Callers should pass URLs without fragments when possible; fragments are ignored.
-func (st *State) SubscriptionURLKey(rawURL string) (string, error) {
-	salt, err := st.ensureSubscriptionURLSalt()
-	if err != nil {
-		return "", err
-	}
+func (st *State) EndpointKey(rawURL string) (string, error) {
+	key := []byte(st.StateID)
 	canon, err := CanonicalSubscriptionURLNoFragment(rawURL)
 	if err != nil {
 		return "", err
 	}
-	mac := hmac.New(sha256.New, salt)
+	mac := hmac.New(sha256.New, key)
 	_, _ = mac.Write([]byte(canon))
 	sum := mac.Sum(nil)
 	return hex.EncodeToString(sum), nil
 }
 
-// EndpointKey returns the stable, salted hash key for an endpoint URL.
-func (st *State) EndpointKey(endpointURL string) (string, error) {
-	return st.SubscriptionURLKey(endpointURL)
-}
-
 // OrderEndpoints returns endpoints ordered by the stored preference list of salted hashes.
 // Any endpoints not present in fs.EndpointOrder are appended in their original order.
-func (st *State) OrderEndpoints(feedID string, endpoints []string) []string {
-	feedID = strings.TrimSpace(feedID)
-	if feedID == "" {
+func (st *State) OrderEndpoints(feedLabel string, endpoints []string) []string {
+	feedLabel = strings.TrimSpace(feedLabel)
+	if feedLabel == "" {
 		return slices.Clip(endpoints)
 	}
-	fs, ok := st.Feeds[feedID]
+	fs, ok := st.Feeds[feedLabel]
 	if !ok {
 		return slices.Clip(endpoints)
 	}
@@ -154,14 +125,14 @@ func orderEndpointsByHashes(endpoints []string, preferredHashes []string, hashFn
 
 // ReconcileEndpointOrder updates an existing stored hash order for a feed given the current
 // endpoints list. If promotedEndpoint is non-empty and present in endpoints, it is moved to the front.
-func (st *State) ReconcileEndpointOrder(feedID string, endpoints []string, promotedEndpoint string) {
-	feedID = strings.TrimSpace(feedID)
-	if feedID == "" {
+func (st *State) ReconcileEndpointOrder(feedLabel string, endpoints []string, promotedEndpoint string) {
+	feedLabel = strings.TrimSpace(feedLabel)
+	if feedLabel == "" {
 		return
 	}
-	fs := st.Feeds[feedID]
+	fs := st.Feeds[feedLabel]
 	fs.EndpointOrder = reconcileEndpointOrderHashes(fs.EndpointOrder, endpoints, promotedEndpoint, st.EndpointKey)
-	st.Feeds[feedID] = fs
+	st.Feeds[feedLabel] = fs
 }
 
 func reconcileEndpointOrderHashes(existing []string, endpoints []string, promotedEndpoint string, hashFn func(string) (string, error)) []string {

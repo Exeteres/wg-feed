@@ -18,7 +18,11 @@ func Run(ctx context.Context, cfg config.Config, logger *log.Logger) error {
 	if err != nil {
 		return fmt.Errorf("create etcd client: %w", err)
 	}
-	defer etcdClient.Close()
+	defer func() {
+		if cerr := etcdClient.Close(); cerr != nil {
+			logger.Printf("close etcd client: %v", cerr)
+		}
+	}()
 
 	st := etcd.NewStore(etcdClient)
 	h := httpapi.NewHandler(st, logger)
@@ -28,7 +32,11 @@ func Run(ctx context.Context, cfg config.Config, logger *log.Logger) error {
 	if err != nil {
 		return fmt.Errorf("listen %s: %w", addr, err)
 	}
-	defer ln.Close()
+	defer func() {
+		if cerr := ln.Close(); cerr != nil {
+			logger.Printf("close listener: %v", cerr)
+		}
+	}()
 
 	srv := &http.Server{
 		Handler:           h,

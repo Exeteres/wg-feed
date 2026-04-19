@@ -21,18 +21,29 @@ The SSE and encryption features are optional.
 
 ## Repository Layout
 
-| Path                                     | Description                                                         |
-| ---------------------------------------- | ------------------------------------------------------------------- |
-| [cmd/wg-feed-server](cmd/wg-feed-server) | HTTP server backed by etcd.                                         |
-| [cmd/wg-feed-upload](cmd/wg-feed-upload) | Upload helper: computes `revision` and writes feed entries to etcd. |
-| [cmd/wg-feed-apply](cmd/wg-feed-apply)   | One-shot client: fetch + reconcile/apply once.                      |
-| [cmd/wg-feed-daemon](cmd/wg-feed-daemon) | Long-running client: sync + reconcile over time.                    |
-| [docs](docs)                             | Draft spec, JSON schema, and examples.                              |
-| [internal](internal)                     | Shared Go packages (not a public API).                              |
+| Path                                           | Description                                                         |
+| ---------------------------------------------- | ------------------------------------------------------------------- |
+| [cmd/wg-feed-server](cmd/wg-feed-server)       | HTTP server backed by etcd.                                         |
+| [cmd/wg-feed-upload](cmd/wg-feed-upload)       | Upload helper: computes `revision` and writes feed entries to etcd. |
+| [cmd/wg-feed-apply](cmd/wg-feed-apply)         | One-shot client: fetch + reconcile/apply once.                      |
+| [cmd/wg-feed-daemon](cmd/wg-feed-daemon)       | Long-running client: sync + reconcile over time.                    |
+| [cmd/wg-feed-installer](cmd/wg-feed-installer) | Interactive Linux installer/updater for daemon config and systemd.  |
+| [docs](docs)                                   | Draft spec, JSON schema, and examples.                              |
+| [internal](internal)                           | Shared Go packages (not a public API).                              |
+
+## Interactive Installer
+
+This repository provides an interactive installer to configure and install `wg-feed-daemon` on Linux distributions that use systemd.
+
+Run it directly from the repository script:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/exeteres/wg-feed/main/scripts/install.sh | bash
+```
 
 ## Nix / NixOS
 
-This repo provides a flake that builds all four binaries and a NixOS module for running `wg-feed-daemon` as a systemd service.
+This repo provides a flake that builds all four binaries, exports a NetworkManager AmneziaWG plugin package, and a NixOS module for running `wg-feed-daemon` as a systemd service.
 
 See [nixos/README.md](nixos/README.md).
 

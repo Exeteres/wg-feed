@@ -20,7 +20,7 @@ func TestDecryptFeedDocument_RoundTrip_WithURLFragmentKey(t *testing.T) {
 		t.Fatalf("GenerateX25519Identity: %v", err)
 	}
 	fragment := strings.ToLower(strings.TrimPrefix(id.String(), "AGE-SECRET-KEY-"))
-	setupURL := "https://example.test/feed#" + fragment
+	subscriptionURL := "https://example.test/feed#" + fragment
 
 	doc := model.FeedDocument{
 		ID: "11111111-1111-4111-8111-111111111111",
@@ -67,7 +67,7 @@ func TestDecryptFeedDocument_RoundTrip_WithURLFragmentKey(t *testing.T) {
 		t.Fatalf("expected non-empty ciphertext")
 	}
 
-	got, err := DecryptFeedDocumentForSetupURL(setupURL, ciphertext)
+	got, err := DecryptFeedDocumentForURL(subscriptionURL, ciphertext)
 	if err != nil {
 		t.Fatalf("DecryptFeedDocumentForURL: %v", err)
 	}
@@ -79,11 +79,11 @@ func TestDecryptFeedDocument_RoundTrip_WithURLFragmentKey(t *testing.T) {
 	}
 }
 
-func TestDecryptFeedDocumentForSetupURL_NoFragment_ReturnsNonRetriableWGFeedError(t *testing.T) {
+func TestDecryptFeedDocumentForURL_NoFragment_ReturnsNonRetriableWGFeedError(t *testing.T) {
 	t.Parallel()
 
 	// Any non-empty ciphertext is fine; the code path should fail before decrypt.
-	_, err := DecryptFeedDocumentForSetupURL("https://example.test/feed", "-----BEGIN AGE ENCRYPTED FILE-----\n...\n-----END AGE ENCRYPTED FILE-----")
+	_, err := DecryptFeedDocumentForURL("https://example.test/feed", "-----BEGIN AGE ENCRYPTED FILE-----\n...\n-----END AGE ENCRYPTED FILE-----")
 	if err == nil {
 		t.Fatalf("expected error")
 	}

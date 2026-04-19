@@ -32,8 +32,8 @@ func ageIdentityFromURL(raw string) (*age.X25519Identity, bool, error) {
 	return id, true, nil
 }
 
-func DecryptFeedDocumentForSetupURL(setupURL string, armoredCiphertext string) (model.FeedDocument, error) {
-	id, ok, err := ageIdentityFromURL(setupURL)
+func DecryptFeedDocumentForURL(rawURL string, armoredCiphertext string) (model.FeedDocument, error) {
+	id, ok, err := ageIdentityFromURL(rawURL)
 	if err != nil {
 		return model.FeedDocument{}, err
 	}

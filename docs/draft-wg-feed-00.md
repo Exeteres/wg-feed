@@ -28,6 +28,7 @@ The key words **MUST**, **SHOULD**, and **MAY** are to be interpreted as describ
 ### 2.1 Client Behavior
 
 A wg-feed client:
+
 1. Performs an HTTP `GET` to a Setup URL.
 2. Validates the response (TLS, status code, content type, schema).
 3. Parses the feed document (from `data`, or by decrypting `encrypted_data`) into a list of tunnels.
@@ -41,12 +42,14 @@ This specification defines **sync** (obtaining the latest Feed Document via poll
 Clients MAY implement sync and reconciliation as separate processes, or as a single combined process for simplicity.
 
 For the purposes of this specification, a **successful sync** is either:
+
 - A `200 OK` response that contains a valid wg-feed JSON success response (Section 3.1), or
 - A `304 Not Modified` response to a valid conditional request.
 
 A `304 Not Modified` response indicates the server asserts that the feed document has not changed relative to the `If-None-Match` value presented. A `304 Not Modified` response does not provide a new `revision` value and does not, by itself, imply that any local managed tunnel state requires change.
 
 After a successful sync, a client SHOULD perform reconciliation if and only if either:
+
 - The `revision` has changed since the last successfully reconciled revision for that subscription entry, or
 - A forced sync has been requested (by the user or by the client to repair local state).
 
@@ -58,23 +61,25 @@ Clients MAY reconcile multiple times for the same revision in reaction to local/
 
 - Clients MUST use `GET`.
 - Servers SHOULD return:
-	- `200 OK` with a wg-feed JSON success response envelope:
-		- `Content-Type: application/json; charset=utf-8`
-		- JSON body (unencrypted): `{ "version": "wg-feed-00", "success": true, "revision": "...", "ttl_seconds": 3600, "supports_sse": false, "data": <FeedDocument> }` (Sections 3.6, 4)
-		- JSON body (encrypted): `{ "version": "wg-feed-00", "success": true, "revision": "...", "ttl_seconds": 3600, "supports_sse": false, "encrypted": true, "encrypted_data": "..." }` (Sections 3.5, 3.6)
-	- `304 Not Modified` when the client presents a valid conditional request.
-	- `401/403` for authentication/authorization failures.
+  - `200 OK` with a wg-feed JSON success response envelope:
+    - `Content-Type: application/json; charset=utf-8`
+    - JSON body (unencrypted): `{ "version": "wg-feed-00", "success": true, "revision": "...", "ttl_seconds": 3600, "supports_sse": false, "data": <FeedDocument> }` (Sections 3.6, 4)
+    - JSON body (encrypted): `{ "version": "wg-feed-00", "success": true, "revision": "...", "ttl_seconds": 3600, "supports_sse": false, "encrypted": true, "encrypted_data": "..." }` (Sections 3.5, 3.6)
+  - `304 Not Modified` when the client presents a valid conditional request.
+  - `401/403` for authentication/authorization failures.
 
 ### 3.2 Content Negotiation and Media Types
 
 The base wg-feed response format is JSON.
 
 Servers MUST support:
+
 - `Content-Type: application/json; charset=utf-8`
 
 Clients SHOULD send an `Accept` header indicating which representation is desired.
 
 Servers MUST select the response representation as follows:
+
 - If the request `Accept` includes `text/event-stream`, and the server supports SSE for this Subscription URL, the server MUST respond with an SSE stream (Section 3.2.1).
 - Else if the request `Accept` includes `application/json`, the server MUST respond with the JSON representation (Section 3.1).
 - Otherwise, the server MAY respond with an alternative representation (e.g., a human-readable HTML page) or MAY respond with `406 Not Acceptable`.
@@ -84,16 +89,19 @@ Servers MUST select the response representation as follows:
 Servers MAY additionally support streaming updates using Server-Sent Events (SSE).
 
 If the request `Accept` includes `text/event-stream`, and the server supports SSE, the server MUST respond with an SSE stream:
+
 - `Content-Type: text/event-stream; charset=utf-8`
 
 If the server needs to return an error to an SSE request, it MAY respond with a non-200 status code and `Content-Type: application/json; charset=utf-8` (Section 3.4). In this case, no stream is started.
 
 SSE event format:
+
 - The server MUST send an `event: feed` event immediately when the request starts.
 - The server MUST send a new `event: feed` event as soon as an updated feed is available.
 - Each `event: feed` event MUST include exactly one `data:` field whose value is the full, serialized wg-feed JSON success response object (Section 3.1).
 
 Keepalive:
+
 - The server MAY send `event: ping` events to keep the connection alive.
 - Each `event: ping` event MUST use `data: {}`.
 
@@ -103,7 +111,7 @@ This SSE mode does not require use of SSE `id` fields or the `Last-Event-ID` req
 
 - A wg-feed JSON success response MUST include a `revision` field.
 - Servers MUST set the HTTP `ETag` value such that the entity-tag payload equals the `revision` string.
-	- Specifically, servers MUST set `ETag` to a strong entity-tag of the form `"<revision>"` (including the quotes required by HTTP).
+  - Specifically, servers MUST set `ETag` to a strong entity-tag of the form `"<revision>"` (including the quotes required by HTTP).
 - Clients SHOULD use `If-None-Match`.
 - Clients SHOULD honor `Cache-Control` where present.
 
@@ -122,12 +130,14 @@ A wg-feed JSON error response body MUST be a JSON object of the form:
 `{ "version": "wg-feed-00", "success": false, "message": <string>, "retriable": <boolean> }`
 
 SSE connections:
+
 - A server MAY close an established SSE connection without an explicit error body (e.g., when it believes the client is no longer authenticated).
 - Clients SHOULD attempt to reconnect according to local policy. A subsequent reconnection attempt MAY return an HTTP error response.
 
 #### 3.4.1 Terminal Conditions
 
 Clients MUST treat the following as **terminal conditions** for a subscription entry:
+
 - Receiving wg-feed JSON error responses with `retriable = false` from all reachable Subscription URLs for that subscription entry.
 - Any other condition explicitly described by this specification as a terminal condition.
 
@@ -152,11 +162,13 @@ Encrypted success response:
 `{ "version": "wg-feed-00", "success": true, "revision": "...", "ttl_seconds": 3600, "supports_sse": false, "encrypted": true, "encrypted_data": <string> }`
 
 Requirements:
+
 - If `encrypted = true`, the response object MUST NOT include `data`.
 - `encrypted_data` MUST be an ASCII-armored age payload whose decrypted plaintext is the UTF-8 JSON serialization of the Feed Document object (Section 4).
 - Clients MUST treat Subscription URLs as secret regardless of encryption.
 
 Key delivery via URL fragment:
+
 - When encryption is used, the client-side private key MUST be provided out-of-band via the Setup URL fragment component (the portion after `#`). URL fragments are not transmitted in HTTP requests.
 - The age secret key (identity) is in the form `AGE-SECRET-KEY-...`.
 - The fragment MUST be the age secret key with the `AGE-SECRET-KEY-` prefix removed and the remainder lowercased.
@@ -164,20 +176,24 @@ Key delivery via URL fragment:
 Clients MUST NOT require (and MUST NOT expect) Subscription URLs (from `endpoints[]`) to contain a fragment.
 
 Example:
+
 - Secret key: `AGE-SECRET-KEY-EXAMPLEEXAMPLEEXAMPLEEXAMPLEEXAMPLEEXAMPLEEXAMPLEEXAMPLEEXAMPLE`
 - URL fragment: `#exampleexampleexampleexampleexampleexampleexampleexampleexample`
 
 Client behavior:
+
 - If a client receives `encrypted = true` but has no usable key material, it MUST treat the subscription as not syncable.
 - If a client cannot decrypt or parse the decrypted Feed Document, it MUST treat this as a terminal condition (Section 3.4.1).
 
 ### 3.6 Success Response Metadata
 
 Every wg-feed JSON success response (`success = true`) MUST include:
+
 - `revision`: opaque revision identifier for this response. The HTTP `ETag` mapping for `revision` is defined in Section 3.3.
 - `ttl_seconds`: suggested refresh interval.
 
 The success response MAY include:
+
 - `supports_sse` (default: `false`): server capability declaration.
 
 If `supports_sse = true`, the server MUST support SSE for this Subscription URL. In particular, if a client sends `Accept: text/event-stream`, the server MUST respond with an SSE stream.
@@ -189,6 +205,7 @@ If a server supports SSE for this Subscription URL, it MUST set `supports_sse = 
 The Feed Document is the JSON object describing tunnels for a feed. In an unencrypted success response it is carried in the `data` field; in an encrypted success response it is obtained by decrypting `encrypted_data` (Sections 3.1, 3.5).
 
 A feed document contains:
+
 - Feed identity (`id`)
 - Feed endpoints (`endpoints[]`)
 - Human display metadata (`display_info`)
@@ -219,6 +236,7 @@ The feed document MUST include a top-level `display_info` object.
 Each tunnel MUST include a `display_info` object.
 
 `display_info` contains:
+
 - `title` (required): human-friendly title.
 - `description` (optional): longer human-friendly text.
 - `icon_url` (optional): an icon reference.
@@ -231,26 +249,31 @@ Clients MAY ignore `description` and/or `icon_url` if they cannot be displayed i
 
 The feed document MAY include `warning_message`.
 
-`warning_message` is a human-oriented, user-defined string intended to communicate a logical warning while the subscription remains reachable (e.g., the subscription is expired and requires payment to renew).
+`warning_message` is a human-oriented, user-defined string intended to communicate that something is wrong with the subscription without needing to trigger a full error response (Section 3.4).
 
 If `warning_message` is present and non-empty, clients MUST surface it to the user for that subscription entry (e.g., in the subscription details UI and/or as a prominent banner).
+
+Each tunnel MAY also include `warning_message` with the same semantics, scoped to that specific tunnel.
 
 ### 4.4 Endpoints Array
 
 The feed document MUST include `endpoints[]`, a non-empty list of Subscription URLs.
 
 Requirements:
+
 - `endpoints[]` MUST contain at least one item.
 - Each item MUST be an HTTPS URL.
 - Items in `endpoints[]` MUST be unique.
 - Items in `endpoints[]` MUST NOT include a URL fragment (the portion after `#`). In particular, `endpoints[]` MUST NOT include an age encryption key fragment.
 
 Client behavior:
+
 - Clients MUST treat all Subscription URLs as equivalent inputs (i.e., servers MUST NOT assume clients will pick a specific URL).
 - Clients MUST attempt endpoints one-by-one until a successful sync occurs (Section 2.2) or all endpoints have been tried.
 - Clients SHOULD prefer Subscription URLs that have recently succeeded for this subscription entry on previous syncs.
 
 When attempting to sync using endpoints, clients MUST use the first endpoint in their chosen order and fall back to subsequent endpoints when:
+
 - The request fails without producing a valid wg-feed JSON error response (Section 3.4) (e.g., connection error, timeout, TLS failure, proxy/HTML error body), or
 - A valid wg-feed JSON error response is received with `retriable = true`.
 
@@ -261,13 +284,16 @@ Clients MUST only enter the terminal condition state (Section 3.4.1) due to `ret
 Clients MAY additionally enter the terminal condition state (Section 3.4.1) according to local policy after a reasonable number of consecutive unsuccessful attempts to successfully sync using any Subscription URL.
 
 Polling:
+
 - For each poll attempt, clients MUST attempt to sync using the endpoints one-by-one until a successful sync occurs (Section 2.2) or all endpoints have been tried.
 
 SSE:
+
 - When using SSE, clients MUST connect to one Subscription URL.
 - If an established SSE connection fails for a retriable reason (e.g., network error, unexpected disconnect), clients SHOULD connect to the next Subscription URL.
 
 Server behavior:
+
 - Servers SHOULD include the current Subscription URL they are serving in `endpoints[]`.
 - Servers MAY omit the current Subscription URL from `endpoints[]` when the operator intends to migrate clients to other endpoints.
 
@@ -280,6 +306,7 @@ The feed document MUST include `tunnels[]`, a list of tunnel definitions.
 ### 5.1 Tunnel Identity
 
 Each tunnel MUST have a stable `id`.
+
 - `id` MUST be unique within the document.
 - `id` MUST be stable across updates for the same logical tunnel.
 
@@ -288,6 +315,7 @@ Each tunnel MUST have a stable `id`.
 Each tunnel MUST include a `name` field.
 
 `name` is a suggested interface/profile name (backend-specific) and MUST be treated as a hint:
+
 - If the backend requires unique names, the client MAY adjust `name` to ensure uniqueness (e.g., appending `-1`, `-2`).
 - If the backend has name length limits, the client MAY truncate `name`.
 
@@ -310,19 +338,36 @@ Rationale: many clients extend the basic WireGuard config format with additional
 ### 5.4 Desired State Resolution
 
 Each tunnel MAY include the following fields:
+
+- `warning_message`: a human-oriented warning scoped to this tunnel.
 - `enabled` (default: `false`): a suggested enabled/disabled value.
 - `forced` (default: `false`): whether `enabled` is enforced by the server.
+- `exclusive` (default: `false`): whether the tunnel is part of an exclusive set.
+
+If a tunnel `warning_message` is present and non-empty, clients MUST surface it to the user for that tunnel.
+
+Exclusive semantics:
+
+- If `exclusive = true`, the tunnel belongs to the global exclusive set across all subscriptions known to the client.
+- At most one exclusive tunnel SHOULD be active at any time.
+- Activating one exclusive tunnel SHOULD deactivate other active exclusive tunnels.
+- Tunnels with `exclusive = false` are unaffected by exclusive behavior.
+- Clients MAY implement exclusive behavior only on backends that support it. On unsupported backends, clients SHOULD treat `exclusive` as a hint and continue normal reconciliation.
+- Single-active clients (e.g., mobile) MUST treat all tunnels as if they have `exclusive = true` and apply the single-active logic accordingly.
 
 Clients MAY provide a user-facing option to ignore server state and let the user control tunnels manually. When enabled, the client MUST ignore both `enabled` and `forced`, and MUST allow the user to enable/disable tunnels.
 
 If server state is not ignored:
+
 - If `forced = true`: the client MUST ensure the tunnel's enabled/disabled state matches `enabled`, and MUST forbid user toggling of the tunnel's enabled/disabled state.
 - If `forced = false`: `enabled` is only the default for newly created/imported tunnels. The client MUST allow the user to enable/disable the tunnel at any time, and MUST ignore any subsequent changes to `enabled` from the feed.
 
 Backend limitations:
+
 - If a backend cannot represent a disabled-but-present tunnel/profile, and `forced = true` with `enabled = false`, the client MUST NOT create the tunnel, and if a managed tunnel with the same `id` already exists, the client SHOULD remove it.
 
 Single-active clients (mobile):
+
 - If the client chooses to auto-activate a tunnel based on the feed, it MUST select the **first** tunnel in `tunnels[]` with `forced = true` and `enabled = true` and activate that tunnel.
 - If no tunnel matches `forced = true` and `enabled = true`, the client MUST NOT activate any tunnel.
 - If the user has chosen to ignore server state (manual mode), the client SHOULD keep the user’s current selection and MUST NOT auto-switch based on feed ordering.
@@ -336,11 +381,13 @@ This state MUST persist across client restarts.
 Clients MUST handle external modifications to the device/backend (e.g., the user deletes or edits a tunnel outside of wg-feed) and MAY trigger reconciliation in response.
 
 Clients reconcile based on the pair `(feed.id, tunnel.id)`:
+
 - If a tunnel is new for that feed: create/import.
 - If a tunnel exists for that feed: update.
 - If a previously managed tunnel for that feed is missing from the latest fetched `tunnels[]`: remove it.
 
 When reconciling a tunnel's enabled/disabled state:
+
 - If `forced = true` (and server state is not ignored), the client MUST apply the feed's `enabled` value.
 - If `forced = false` (or server state is ignored), the client MUST NOT change enabled/disabled state due to the feed. For newly created/imported tunnels, the client SHOULD use `enabled` as the initial default when the backend supports it.
 
@@ -351,6 +398,7 @@ Clients MUST perform best-effort update.
 If a client knows an in-place update is not possible for its backend, or if the client attempted an in-place update and it failed, the client MUST recreate/restart the tunnel to apply the change unless the user has forbidden automatic recreation/restart.
 
 Clients MAY provide a user-facing option to forbid automatic tunnel recreation/restart (to avoid disruption). When this option is enabled and a change would require restart/recreate:
+
 - The client MUST NOT automatically restart the tunnel.
 - The client SHOULD surface a notification indicating that the tunnel configuration has changed and that the user should recreate it (e.g., turn it off and on again) to apply updates.
 - The client SHOULD record that the tunnel has pending changes and apply them when the user next restarts/recreates it.
@@ -370,10 +418,12 @@ If a client does not store subscription entries, it still implements the protoco
 When a user adds a new Setup URL, the client MUST fetch it first and read the feed `id`.
 
 Setup URL requirements:
+
 - The Setup URL is a Subscription URL and MUST meet all Subscription URL requirements.
 - The URL is opaque/arbitrary: it MUST be treated as a server-defined identifier and does not need to contain (or encode) the Feed ID.
 
 After bootstrapping:
+
 - Clients MUST NOT store the Setup URL itself.
 - Clients MUST store and use the Feed Document `endpoints[]` list for ongoing sync.
 
@@ -388,6 +438,7 @@ If a subscription entry with the same feed `id` has already been added on that d
 Clients MAY implement an enabled/disabled toggle per subscription entry.
 
 When a subscription entry is disabled:
+
 - The client MUST NOT automatically refresh that subscription entry.
 - The client MUST NOT perform automatic reconciliation actions for that subscription entry.
 - The client MUST leave any tunnels previously managed by that subscription entry as-is.

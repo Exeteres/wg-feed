@@ -14,7 +14,7 @@
       "description": "Example wg-feed document showing two tunnels",
       "icon_url": "data:image/svg+xml;base64,PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHZpZXdCb3g9IjAgMCAxNiAxNiI+PGNpcmNsZSBjeD0iOCIgY3k9IjgiIHI9IjciLz48L3N2Zz4="
     },
-    "warning_message": "Subscription expired; please renew to continue receiving updates.",
+    "warning_message": "Something is wrong with this subscription.",
     "tunnels": [
       {
         "id": "demo-primary",
@@ -30,6 +30,7 @@
       {
         "id": "demo-secondary",
         "name": "demo-secondary",
+        "warning_message": "This tunnel is currently misconfigured and should not be used.",
         "display_info": {
           "title": "Demo Secondary"
         },

@@ -2,16 +2,37 @@ package wgquick
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"io"
-	"log"
+	"log/slog"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
 
+	"github.com/exeteres/wg-feed/internal/client/backend/shared"
 	"github.com/exeteres/wg-feed/internal/client/execx"
+	"github.com/exeteres/wg-feed/internal/client/state"
+	"github.com/exeteres/wg-feed/internal/model"
 )
+
+func testTunnel(name, cfg string, forced bool, exclusive bool) shared.ResolvedTunnel {
+	return shared.ResolvedTunnel{Tunnel: model.Tunnel{Name: name, WGQuickConfig: cfg, Enabled: true, Forced: forced, Exclusive: exclusive}, EffectiveEnabled: true}
+}
+
+func testTunnelDisabled(name, cfg string, forced bool, exclusive bool) shared.ResolvedTunnel {
+	return shared.ResolvedTunnel{Tunnel: model.Tunnel{Name: name, WGQuickConfig: cfg, Enabled: false, Forced: forced, Exclusive: exclusive}, EffectiveEnabled: false}
+}
+
+type tunnelDataForTest struct {
+	DeviceName string `json:"device_name"`
+}
+
+func tunnelStateWithWGQuickName(name string) state.TunnelState {
+	b, _ := json.Marshal(tunnelDataForTest{DeviceName: name})
+	return state.TunnelState{Data: b}
+}
 
 func hasCallPrefix(calls []string, prefix string) bool {
 	for _, c := range calls {
@@ -24,6 +45,8 @@ func hasCallPrefix(calls []string, prefix string) bool {
 
 type fakeRunner struct {
 	calls []string
+
+	linkByName map[string]bool
 
 	wgShowErr        error
 	wgShowconfStdout string
@@ -39,11 +62,23 @@ type fakeRunner struct {
 }
 
 func (r *fakeRunner) Run(_ context.Context, name string, args ...string) (execx.Result, error) {
+	if r.linkByName == nil {
+		r.linkByName = map[string]bool{}
+	}
+
 	line := name
 	if len(args) > 0 {
 		line += " " + strings.Join(args, " ")
 	}
 	r.calls = append(r.calls, line)
+
+	if name == "ip" && len(args) >= 5 && args[0] == "-o" && args[1] == "link" && args[2] == "show" && args[3] == "dev" {
+		iface := args[4]
+		if r.linkByName[iface] {
+			return execx.Result{Stdout: "1: " + iface + ": <POINTOPOINT>"}, nil
+		}
+		return execx.Result{}, errors.New("not found")
+	}
 
 	switch name {
 	case "wg", "awg":
@@ -60,12 +95,14 @@ func (r *fakeRunner) Run(_ context.Context, name string, args ...string) (execx.
 			return execx.Result{Stdout: r.wgShowconfStdout}, nil
 		}
 		if len(args) >= 3 && args[0] == "syncconf" {
+			r.linkByName[args[1]] = true
 			if r.syncconfErr != nil {
 				return execx.Result{}, r.syncconfErr
 			}
 			return execx.Result{}, nil
 		}
 		if len(args) >= 3 && args[0] == "setconf" {
+			r.linkByName[args[1]] = true
 			if r.setconfErr != nil {
 				return execx.Result{}, r.setconfErr
 			}
@@ -79,11 +116,17 @@ func (r *fakeRunner) Run(_ context.Context, name string, args ...string) (execx.
 			return execx.Result{Stdout: r.stripStdout}, nil
 		}
 		if len(args) >= 2 && args[0] == "up" {
+			iface := strings.TrimSuffix(filepath.Base(args[1]), ".conf")
 			if r.onQuickUp != nil {
 				if err := r.onQuickUp(args[1]); err != nil {
 					return execx.Result{}, err
 				}
 			}
+			r.linkByName[iface] = true
+			return execx.Result{}, nil
+		}
+		if len(args) >= 2 && args[0] == "down" {
+			delete(r.linkByName, args[1])
 			return execx.Result{}, nil
 		}
 		// down is always best-effort in Backend.Apply; just succeed here.
@@ -95,7 +138,7 @@ func (r *fakeRunner) Run(_ context.Context, name string, args ...string) (execx.
 
 func TestApply_Enabled_InterfaceDown_FallsBackToDownUp(t *testing.T) {
 	r := &fakeRunner{wgShowErr: errors.New("not up")}
-	logger := log.New(io.Discard, "", 0)
+	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
 	b := New(r, logger)
 
 	var gotConfig string
@@ -120,7 +163,7 @@ func TestApply_Enabled_InterfaceDown_FallsBackToDownUp(t *testing.T) {
 
 	// Note: config lacks trailing newline on purpose.
 	cfg := "[Interface]\nPrivateKey = x"
-	if err := b.Apply(context.Background(), "amsterdam-2", cfg, true, false); err != nil {
+	if _, err := b.Apply(context.Background(), testTunnel("amsterdam-2", cfg, false, false), state.TunnelState{}); err != nil {
 		t.Fatalf("Apply error: %v", err)
 	}
 	if !strings.HasSuffix(gotConfig, "\n") {
@@ -143,11 +186,11 @@ func TestApply_Enabled_InterfaceUp_DeviceUpdateUsesSyncconf_NoDownUp(t *testing.
 	r := &fakeRunner{
 		stripStdout: "[Interface]\nPrivateKey = x\n",
 	}
-	logger := log.New(io.Discard, "", 0)
+	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
 	b := New(r, logger)
 
 	cfg := "[Interface]\nPrivateKey = x\n"
-	if err := b.Apply(context.Background(), "amsterdam-2", cfg, true, false); err != nil {
+	if _, err := b.Apply(context.Background(), testTunnel("amsterdam-2", cfg, false, false), state.TunnelState{}); err != nil {
 		t.Fatalf("Apply error: %v", err)
 	}
 
@@ -170,11 +213,11 @@ func TestApply_Enabled_WithAmneziaExtensions_UsesAWGForLiveUpdate(t *testing.T) 
 	r := &fakeRunner{
 		stripStdout: "[Interface]\nPrivateKey = x\nJc = 3\n",
 	}
-	logger := log.New(io.Discard, "", 0)
+	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
 	b := New(r, logger)
 
 	cfg := "[Interface]\nPrivateKey = x\nJc = 3\n"
-	if err := b.Apply(context.Background(), "amsterdam-2", cfg, true, false); err != nil {
+	if _, err := b.Apply(context.Background(), testTunnel("amsterdam-2", cfg, false, false), state.TunnelState{}); err != nil {
 		t.Fatalf("Apply error: %v", err)
 	}
 
@@ -195,10 +238,10 @@ func TestApply_Enabled_WithAmneziaExtensions_UsesAWGForLiveUpdate(t *testing.T) 
 
 func TestApply_Enabled_InterfaceDown_WithAmneziaExtensions_UsesAWGQuickDownUp(t *testing.T) {
 	r := &fakeRunner{wgShowErr: errors.New("not up")}
-	b := New(r, log.New(io.Discard, "", 0))
+	b := New(r, slog.New(slog.NewTextHandler(io.Discard, nil)))
 
 	cfg := "[Interface]\nPrivateKey = x\nS1 = aa\n"
-	if err := b.Apply(context.Background(), "amsterdam-2", cfg, true, false); err != nil {
+	if _, err := b.Apply(context.Background(), testTunnel("amsterdam-2", cfg, false, false), state.TunnelState{}); err != nil {
 		t.Fatalf("Apply error: %v", err)
 	}
 
@@ -223,10 +266,10 @@ func TestApply_Enabled_InterfaceDown_WithAmneziaExtensions_NoFallbackToWGQuickOn
 		_ = path
 		return errors.New("awg-quick up failed")
 	}
-	b := New(r, log.New(io.Discard, "", 0))
+	b := New(r, slog.New(slog.NewTextHandler(io.Discard, nil)))
 
 	cfg := "[Interface]\nPrivateKey = x\nI1 = deadbeef\n"
-	err := b.Apply(context.Background(), "amsterdam-2", cfg, true, false)
+	_, err := b.Apply(context.Background(), testTunnel("amsterdam-2", cfg, false, false), state.TunnelState{})
 	if err == nil {
 		t.Fatalf("expected apply to fail when awg-quick up fails")
 	}
@@ -245,11 +288,11 @@ func TestApply_Enabled_InterfaceUp_DeviceUpdate_ReconcilesAllowedIPRoutes(t *tes
 		wgShowconfStdout: "[Interface]\nPrivateKey = x\n\n[Peer]\nPublicKey = pub1\nAllowedIPs = 10.0.0.0/24, 192.168.0.0/16\n",
 		stripStdout:      "[Interface]\nPrivateKey = x\n\n[Peer]\nPublicKey = pub1\nAllowedIPs = 10.0.0.0/24, 2001:db8::/64\n",
 	}
-	logger := log.New(io.Discard, "", 0)
+	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
 	b := New(r, logger)
 
 	cfg := "[Interface]\nPrivateKey = x\n"
-	if err := b.Apply(context.Background(), "amsterdam-2", cfg, true, false); err != nil {
+	if _, err := b.Apply(context.Background(), testTunnel("amsterdam-2", cfg, false, false), state.TunnelState{}); err != nil {
 		t.Fatalf("Apply error: %v", err)
 	}
 
@@ -273,11 +316,11 @@ func TestApply_Enabled_InterfaceUp_DeviceUpdate_ReconcilesAllowedIPRoutes_Multip
 		wgShowconfStdout: "[Interface]\nPrivateKey = x\n\n[Peer]\nPublicKey = pub1\nAllowedIPs = 10.0.0.0/24\n\n[Peer]\nPublicKey = pub2\nAllowedIPs = 10.1.0.0/24, 2001:db8:1::/64\n",
 		stripStdout:      "[Interface]\nPrivateKey = x\n\n[Peer]\nPublicKey = pub1\nAllowedIPs = 10.0.0.0/24\n\n[Peer]\nPublicKey = pub3\nAllowedIPs = 10.2.0.0/24\n",
 	}
-	logger := log.New(io.Discard, "", 0)
+	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
 	b := New(r, logger)
 
 	cfg := "[Interface]\nPrivateKey = x\n"
-	if err := b.Apply(context.Background(), "amsterdam-2", cfg, true, false); err != nil {
+	if _, err := b.Apply(context.Background(), testTunnel("amsterdam-2", cfg, false, false), state.TunnelState{}); err != nil {
 		t.Fatalf("Apply error: %v", err)
 	}
 
@@ -301,11 +344,11 @@ func TestApply_Enabled_InterfaceUp_DeviceUpdate_ReconcilesAllowedIPRoutes_DedupA
 		wgShowconfStdout: "[Interface]\nPrivateKey = x\n\n[Peer]\nPublicKey = pub1\nAllowedIPs = 10.0.0.0/24\n\n[Peer]\nPublicKey = pub2\nAllowedIPs = 10.0.0.0/24\n",
 		stripStdout:      "[Interface]\nPrivateKey = x\n\n[Peer]\nPublicKey = pub1\nAllowedIPs = 10.0.0.0/24\n",
 	}
-	logger := log.New(io.Discard, "", 0)
+	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
 	b := New(r, logger)
 
 	cfg := "[Interface]\nPrivateKey = x\n"
-	if err := b.Apply(context.Background(), "amsterdam-2", cfg, true, false); err != nil {
+	if _, err := b.Apply(context.Background(), testTunnel("amsterdam-2", cfg, false, false), state.TunnelState{}); err != nil {
 		t.Fatalf("Apply error: %v", err)
 	}
 
@@ -320,11 +363,11 @@ func TestApply_Enabled_InterfaceUp_DeviceUpdate_ReconcilesAllowedIPRoutes_PeerAd
 		wgShowconfStdout: "[Interface]\nPrivateKey = x\n",
 		stripStdout:      "[Interface]\nPrivateKey = x\n\n[Peer]\nPublicKey = pub1\nAllowedIPs = 10.9.0.0/24\n",
 	}
-	logger := log.New(io.Discard, "", 0)
+	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
 	b := New(r, logger)
 
 	cfg := "[Interface]\nPrivateKey = x\n"
-	if err := b.Apply(context.Background(), "amsterdam-2", cfg, true, false); err != nil {
+	if _, err := b.Apply(context.Background(), testTunnel("amsterdam-2", cfg, false, false), state.TunnelState{}); err != nil {
 		t.Fatalf("Apply error: %v", err)
 	}
 
@@ -342,11 +385,11 @@ func TestApply_Enabled_InterfaceUp_DeviceUpdate_ReconcilesAllowedIPRoutes_PeerRe
 		wgShowconfStdout: "[Interface]\nPrivateKey = x\n\n[Peer]\nPublicKey = pub1\nAllowedIPs = 10.9.0.0/24, 2001:db8:9::/64\n",
 		stripStdout:      "[Interface]\nPrivateKey = x\n",
 	}
-	logger := log.New(io.Discard, "", 0)
+	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
 	b := New(r, logger)
 
 	cfg := "[Interface]\nPrivateKey = x\n"
-	if err := b.Apply(context.Background(), "amsterdam-2", cfg, true, false); err != nil {
+	if _, err := b.Apply(context.Background(), testTunnel("amsterdam-2", cfg, false, false), state.TunnelState{}); err != nil {
 		t.Fatalf("Apply error: %v", err)
 	}
 
@@ -365,11 +408,11 @@ func TestApply_Enabled_InterfaceUp_SyncconfFails_SetconfSucceeds(t *testing.T) {
 		syncconfErr: errors.New("syncconf failed"),
 		setconfErr:  nil,
 	}
-	logger := log.New(io.Discard, "", 0)
+	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
 	b := New(r, logger)
 
 	cfg := "[Interface]\nPrivateKey = x\n"
-	if err := b.Apply(context.Background(), "amsterdam-2", cfg, true, false); err != nil {
+	if _, err := b.Apply(context.Background(), testTunnel("amsterdam-2", cfg, false, false), state.TunnelState{}); err != nil {
 		t.Fatalf("Apply error: %v", err)
 	}
 
@@ -387,11 +430,11 @@ func TestApply_Enabled_InterfaceUp_SyncconfFails_SetconfSucceeds(t *testing.T) {
 
 func TestApply_Enabled_InterfaceUp_EmptyStripFallsBackToDownUp(t *testing.T) {
 	r := &fakeRunner{stripStdout: "\n"}
-	logger := log.New(io.Discard, "", 0)
+	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
 	b := New(r, logger)
 
 	cfg := "[Interface]\nPrivateKey = x\n"
-	if err := b.Apply(context.Background(), "amsterdam-2", cfg, true, false); err != nil {
+	if _, err := b.Apply(context.Background(), testTunnel("amsterdam-2", cfg, false, false), state.TunnelState{}); err != nil {
 		t.Fatalf("Apply error: %v", err)
 	}
 
@@ -406,17 +449,41 @@ func TestApply_Enabled_InterfaceUp_EmptyStripFallsBackToDownUp(t *testing.T) {
 
 func TestApply_Disabled_CallsDownOnly(t *testing.T) {
 	r := &fakeRunner{}
-	logger := log.New(io.Discard, "", 0)
+	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
 	b := New(r, logger)
 
 	cfg := "[Interface]\nPrivateKey = x\n"
-	if err := b.Apply(context.Background(), "amsterdam-2", cfg, false, false); err != nil {
+	st, err := b.Apply(context.Background(), testTunnelDisabled("amsterdam-2", cfg, false, false), state.TunnelState{})
+	if err != nil {
 		t.Fatalf("Apply error: %v", err)
+	}
+	if len(st.Data) != 0 {
+		t.Fatalf("expected disabled apply to clear state data")
 	}
 
 	joined := strings.Join(r.calls, "\n")
-	if strings.Contains(joined, "wg-quick up ") {
-		t.Fatalf("did not expect wg-quick up when disabled; got:\n%s", joined)
+	if joined != "" {
+		t.Fatalf("expected no commands when disabled with empty state; got:\n%s", joined)
+	}
+}
+
+func TestApply_Disabled_WithLockedDevice_ClearsDataAndBringsDown(t *testing.T) {
+	r := &fakeRunner{}
+	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
+	b := New(r, logger)
+
+	cfg := "[Interface]\nPrivateKey = x\n"
+	st, err := b.Apply(context.Background(), testTunnelDisabled("ignored", cfg, false, false), state.TunnelState{Data: tunnelStateWithWGQuickName("amsterdam-2").Data})
+	if err != nil {
+		t.Fatalf("Apply error: %v", err)
+	}
+	if len(st.Data) != 0 {
+		t.Fatalf("expected disabled apply to clear state data")
+	}
+
+	joined := strings.Join(r.calls, "\n")
+	if !strings.Contains(joined, "awg-quick down amsterdam-2") {
+		t.Fatalf("expected awg-quick down; got:\n%s", joined)
 	}
 	if !strings.Contains(joined, "wg-quick down amsterdam-2") {
 		t.Fatalf("expected wg-quick down; got:\n%s", joined)
@@ -425,8 +492,8 @@ func TestApply_Disabled_CallsDownOnly(t *testing.T) {
 
 func TestRemove_EmptyName_NoOp(t *testing.T) {
 	r := &fakeRunner{}
-	b := New(r, log.New(io.Discard, "", 0))
-	if err := b.Remove(context.Background(), ""); err != nil {
+	b := New(r, slog.New(slog.NewTextHandler(io.Discard, nil)))
+	if err := b.Remove(context.Background(), state.TunnelState{}); err != nil {
 		t.Fatalf("Remove error: %v", err)
 	}
 	if len(r.calls) != 0 {
@@ -436,8 +503,8 @@ func TestRemove_EmptyName_NoOp(t *testing.T) {
 
 func TestRemove_NonEmptyName_CallsDown(t *testing.T) {
 	r := &fakeRunner{}
-	b := New(r, log.New(io.Discard, "", 0))
-	if err := b.Remove(context.Background(), "amsterdam-2"); err != nil {
+	b := New(r, slog.New(slog.NewTextHandler(io.Discard, nil)))
+	if err := b.Remove(context.Background(), tunnelStateWithWGQuickName("amsterdam-2")); err != nil {
 		t.Fatalf("Remove error: %v", err)
 	}
 	joined := strings.Join(r.calls, "\n")
@@ -448,8 +515,8 @@ func TestRemove_NonEmptyName_CallsDown(t *testing.T) {
 
 func TestApply_EmptyName_Errors(t *testing.T) {
 	r := &fakeRunner{}
-	b := New(r, log.New(io.Discard, "", 0))
-	err := b.Apply(context.Background(), " ", "[Interface]\nPrivateKey = x\n", true, false)
+	b := New(r, slog.New(slog.NewTextHandler(io.Discard, nil)))
+	_, err := b.Apply(context.Background(), testTunnel(" ", "[Interface]\nPrivateKey = x\n", false, false), state.TunnelState{})
 	if err == nil {
 		t.Fatalf("expected error")
 	}
@@ -460,7 +527,7 @@ func TestApply_EmptyName_Errors(t *testing.T) {
 
 func TestApply_WritesConfigInTempDir(t *testing.T) {
 	r := &fakeRunner{wgShowErr: errors.New("down")}
-	b := New(r, log.New(io.Discard, "", 0))
+	b := New(r, slog.New(slog.NewTextHandler(io.Discard, nil)))
 
 	r.onQuickUp = func(path string) error {
 		// This is mainly to ensure it writes under a temp dir, not cwd.
@@ -470,7 +537,7 @@ func TestApply_WritesConfigInTempDir(t *testing.T) {
 		return nil
 	}
 
-	if err := b.Apply(context.Background(), "amsterdam-2", "[Interface]\nPrivateKey = x", true, false); err != nil {
+	if _, err := b.Apply(context.Background(), testTunnel("amsterdam-2", "[Interface]\nPrivateKey = x", false, false), state.TunnelState{}); err != nil {
 		t.Fatalf("Apply error: %v", err)
 	}
 }

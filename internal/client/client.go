@@ -3,30 +3,44 @@ package client
 import (
 	"context"
 	"fmt"
-	"log"
+	"log/slog"
+	"sort"
 	"strings"
 
 	"github.com/exeteres/wg-feed/internal/client/backend"
+	"github.com/exeteres/wg-feed/internal/client/backend/shared"
 	"github.com/exeteres/wg-feed/internal/client/config"
 	"github.com/exeteres/wg-feed/internal/client/feed"
 	"github.com/exeteres/wg-feed/internal/client/state"
 	"github.com/exeteres/wg-feed/internal/model"
 )
 
-func RunOnce(ctx context.Context, cfg config.Config, setupURLs []string, logger *log.Logger) error {
-	b, err := backend.New(cfg, logger)
-	if err != nil {
-		return err
-	}
-
+func RunOnce(ctx context.Context, cfg config.Config, logger *slog.Logger) error {
 	st, err := state.Load(cfg.StatePath)
 	if err != nil {
 		return fmt.Errorf("load state: %w", err)
 	}
+	logger.Info("apply run started", "state_path", cfg.StatePath, "feeds", len(cfg.Feeds))
 
-	seen := map[string]string{} // feedID -> setupURL
-	for _, setupURL := range setupURLs {
-		if err := applyOne(ctx, cfg, b, &st, setupURL, logger, seen); err != nil {
+	feedLabels := make([]string, 0, len(cfg.Feeds))
+	for feedLabel := range cfg.Feeds {
+		feedLabels = append(feedLabels, feedLabel)
+	}
+	sort.Strings(feedLabels)
+
+	seen := map[string]string{} // feedID -> configured feed label
+	for _, feedLabel := range feedLabels {
+		feedCfg := cfg.Feeds[feedLabel]
+		if !feedCfg.Sync.Enabled {
+			logger.Debug("feed skipped", "feed_label", feedLabel, "reason", "sync disabled")
+			continue
+		}
+
+		backendSet, err := buildBackendSet(feedCfg, logger)
+		if err != nil {
+			return fmt.Errorf("feed %s: %w", feedLabel, err)
+		}
+		if err := applyOne(ctx, &st, feedLabel, feedCfg, backendSet, logger, seen); err != nil {
 			return err
 		}
 	}
@@ -34,72 +48,65 @@ func RunOnce(ctx context.Context, cfg config.Config, setupURLs []string, logger 
 	if err := state.SaveAtomic(cfg.StatePath, st); err != nil {
 		return fmt.Errorf("save state: %w", err)
 	}
+	logger.Info("apply run completed")
 	return nil
 }
 
-func applyOne(ctx context.Context, cfg config.Config, b backend.Backend, st *state.State, setupURL string, logger *log.Logger, seen map[string]string) error {
-	setupURL = strings.TrimSpace(setupURL)
-
-	// Prefer endpoints learned from cached encrypted_data before attempting a bootstrap fetch.
-	key, err := st.SubscriptionURLKey(setupURL)
-	if err != nil {
-		return fmt.Errorf("feed %s: %w", feed.RedactURL(setupURL), err)
+func buildBackendSet(feedCfg config.FeedConfig, logger *slog.Logger) (map[string]backend.Backend, error) {
+	out := make(map[string]backend.Backend, len(feedCfg.Backends))
+	for backendLabel, backendCfg := range feedCfg.Backends {
+		b, err := backend.NewForType(backendCfg.Type, logger)
+		if err != nil {
+			return nil, fmt.Errorf("backend %s: %w", backendLabel, err)
+		}
+		out[backendLabel] = b
 	}
+	return out, nil
+}
+
+func applyOne(ctx context.Context, st *state.State, feedLabel string, feedCfg config.FeedConfig, backendSet map[string]backend.Backend, logger *slog.Logger, seen map[string]string) error {
 	var endpoints []string
-	var cachedFeedID string
-	if feedID := strings.TrimSpace(st.SetupURLMap[key]); feedID != "" {
-		cachedFeedID = feedID
-		if fs, ok := st.Feeds[feedID]; ok {
-			if strings.TrimSpace(fs.CachedEncryptedData) != "" {
-				doc, err := feed.DecryptFeedDocumentForSetupURL(setupURL, fs.CachedEncryptedData)
-				if err != nil {
-					return fmt.Errorf("feed %s: %w", feed.RedactURL(setupURL), err)
-				}
-				endpoints = st.OrderEndpoints(feedID, doc.Endpoints)
-			}
+	decryptURL := feedCfg.DecryptURL()
+	fs := st.Feeds[feedLabel]
+	if strings.TrimSpace(fs.CachedEncryptedData) != "" {
+		doc, err := feed.DecryptFeedDocumentForURL(decryptURL, fs.CachedEncryptedData)
+		if err != nil {
+			return fmt.Errorf("feed %s: %w", feedLabel, err)
 		}
+		endpoints = st.OrderEndpoints(feedLabel, doc.Endpoints)
+	}
+	if len(endpoints) == 0 {
+		endpoints = st.OrderEndpoints(feedLabel, feedCfg.Sync.Endpoints)
 	}
 
-	// One-shot apply is always a forced reconciliation: it MUST fetch a full document.
-	// If endpoints are known, do not use the Setup URL for network requests.
-	var res feed.FetchResult
-	if len(endpoints) != 0 {
-		fetched, usedEndpoint, err := feed.FetchAnyEndpoints(ctx, endpoints, setupURL, "")
-		if err != nil {
-			return fmt.Errorf("feed %s: %w", feed.RedactURL(setupURL), err)
-		}
-		res = fetched
-		// Best-effort: record endpoint preference for next sync.
-		if strings.TrimSpace(cachedFeedID) != "" {
-			st.ReconcileEndpointOrder(cachedFeedID, res.Feed.Endpoints, usedEndpoint)
-		}
-	} else {
-		fetched, err := feed.FetchWithDecryptURL(ctx, setupURL, setupURL, "")
-		if err != nil {
-			return fmt.Errorf("feed %s: %w", feed.RedactURL(setupURL), err)
-		}
-		res = fetched
+	res, usedEndpoint, err := feed.FetchAnyEndpoints(ctx, endpoints, decryptURL, "")
+	if err != nil {
+		return fmt.Errorf("feed %s: %w", feedLabel, err)
 	}
+	logger.Debug("feed fetched", "feed_label", feedLabel, "revision", strings.TrimSpace(res.Revision), "encrypted", res.Encrypted, "ttl_seconds", res.TTLSeconds, "endpoint", feed.RedactURL(usedEndpoint))
 
 	feedID := strings.TrimSpace(res.Feed.ID)
 	if feedID == "" {
-		return fmt.Errorf("feed %s: missing id", feed.RedactURL(setupURL))
+		return fmt.Errorf("feed %s: missing id", feedLabel)
 	}
 	if msg := strings.TrimSpace(res.Feed.Warning); msg != "" {
-		logger.Printf("feed warning: feed=%q message=%q", feed.RedactURL(setupURL), msg)
+		logger.Warn("feed warning", "feed_label", feedLabel, "message", msg)
 	}
-	if existingURL, ok := seen[feedID]; ok {
-		if existingURL != setupURL {
-			logger.Printf("duplicate setup url ignored: feed_id=%q url=%q already_seen_at=%q", feedID, feed.RedactURL(setupURL), feed.RedactURL(existingURL))
+	if existingLabel, ok := seen[feedID]; ok {
+		if existingLabel != feedLabel {
+			logger.Info("duplicate feed ignored", "feed_id", feedID, "feed_label", feedLabel, "already_seen_at", existingLabel)
 		}
 		return nil
 	}
-	seen[feedID] = setupURL
-	st.SetupURLMap[key] = feedID
-	fs := st.Feeds[feedID]
-	if fs.Tunnels == nil {
-		fs.Tunnels = map[string]state.TunnelState{}
+	seen[feedID] = feedLabel
+
+	fs = st.Feeds[feedLabel]
+	if fs.Backends == nil {
+		fs.Backends = map[string]state.BackendState{}
 	}
+	fs.ID = feedID
+	st.ReconcileEndpointOrder(feedLabel, res.Feed.Endpoints, usedEndpoint)
+	fs = st.Feeds[feedLabel]
 	v := res.TTLSeconds
 	fs.TTLSeconds = &v
 	if res.Encrypted {
@@ -107,64 +114,86 @@ func applyOne(ctx context.Context, cfg config.Config, b backend.Backend, st *sta
 	} else {
 		fs.CachedEncryptedData = ""
 	}
-	st.Feeds[feedID] = fs
+	for backendLabel, backendCfg := range feedCfg.Backends {
+		bs := fs.Backends[backendLabel]
+		if bs.Tunnels == nil {
+			bs.Tunnels = map[string]state.TunnelState{}
+		}
+		bs.Type = string(backendCfg.Type)
+		fs.Backends[backendLabel] = bs
+	}
+	st.Feeds[feedLabel] = fs
 
-	if err := ApplyFeed(ctx, cfg, b, st, setupURL, res.Feed, logger); err != nil {
+	if err := ApplyFeed(ctx, st, feedLabel, backendSet, res.Feed, feedCfg.Tunnels, feedCfg.BackendTunnelOverrides(), logger); err != nil {
 		return err
 	}
-	fs = st.Feeds[feedID]
+	fs = st.Feeds[feedLabel]
 	fs.LastReconciledRevision = strings.TrimSpace(res.Revision)
-	st.Feeds[feedID] = fs
+	st.Feeds[feedLabel] = fs
 	return nil
 }
 
-func ApplyFeed(ctx context.Context, _ config.Config, b backend.Backend, st *state.State, sourceURL string, f model.FeedDocument, logger *log.Logger) error {
+func ApplyFeed(ctx context.Context, st *state.State, feedLabel string, backends map[string]backend.Backend, f model.FeedDocument, tunnelCfg map[string]config.FeedTunnelConfig, backendTunnelCfg map[string]map[string]config.FeedTunnelConfig, logger *slog.Logger) error {
 	feedID := strings.TrimSpace(f.ID)
 	if feedID == "" {
-		return fmt.Errorf("feed %s: missing id", feed.RedactURL(sourceURL))
-	}
-	prev := st.Feeds[feedID]
-	if prev.Tunnels == nil {
-		prev.Tunnels = map[string]state.TunnelState{}
+		return fmt.Errorf("feed %s: missing id", feedLabel)
 	}
 
-	currentTunnelIDs := make(map[string]struct{}, len(f.Tunnels))
-	for _, t := range f.Tunnels {
-		currentTunnelIDs[t.ID] = struct{}{}
+	fs := st.Feeds[feedLabel]
+	if fs.Backends == nil {
+		fs.Backends = map[string]state.BackendState{}
+	}
+	fs.ID = feedID
 
-		prevTunnel, hadPrev := prev.Tunnels[t.ID]
-		enabled := t.Enabled
-		if hadPrev && !t.Forced {
-			// When forced=false, enabled is only the initial default.
-			// Subsequent changes from the feed must be ignored.
-			enabled = prevTunnel.Enabled
+	for backendLabel, b := range backends {
+		logger.Debug("reconcile backend started", "feed_label", feedLabel, "backend_label", backendLabel, "tunnels", len(f.Tunnels))
+		bs := fs.Backends[backendLabel]
+		if bs.Tunnels == nil {
+			bs.Tunnels = map[string]state.TunnelState{}
+		}
+		backendOverrides := backendTunnelCfg[backendLabel]
+		currentTunnelIDs := make(map[string]struct{}, len(f.Tunnels))
+		for _, t := range f.Tunnels {
+			currentTunnelIDs[t.ID] = struct{}{}
+
+			prevTunnel := bs.Tunnels[t.ID]
+			enabled := resolveTunnelEnabled(t.Enabled, tunnelCfg[t.ID], backendOverrides[t.ID])
+
+			nextTunnel := prevTunnel
+			resolvedTunnel := shared.ResolvedTunnel{Tunnel: t, EffectiveEnabled: enabled}
+
+			appliedTunnel, err := b.Apply(ctx, resolvedTunnel, nextTunnel)
+			if err != nil {
+				logger.Error("tunnel apply failed", "feed_label", feedLabel, "backend_label", backendLabel, "tunnel_id", t.ID, "enabled", enabled, "err", err)
+				return err
+			}
+			bs.Tunnels[t.ID] = appliedTunnel
 		}
 
-		// If the backend name hint changes for a managed tunnel, best-effort recreate.
-		if hadPrev && strings.TrimSpace(prevTunnel.Name) != "" && strings.TrimSpace(prevTunnel.Name) != strings.TrimSpace(t.Name) {
-			_ = b.Remove(ctx, prevTunnel.Name)
-			delete(prev.Tunnels, t.ID)
-			hadPrev = false
+		for tunnelID := range bs.Tunnels {
+			if _, ok := currentTunnelIDs[tunnelID]; ok {
+				continue
+			}
+			if err := b.Remove(ctx, bs.Tunnels[tunnelID]); err != nil {
+				logger.Warn("tunnel remove failed", "feed_label", feedLabel, "backend_label", backendLabel, "tunnel_id", tunnelID, "err", err)
+			}
+			delete(bs.Tunnels, tunnelID)
 		}
 
-		if err := b.Apply(ctx, t.Name, t.WGQuickConfig, enabled, t.Forced); err != nil {
-			logger.Printf("apply failed source=%q tunnel=%q name=%q enabled=%v err=%v", feed.RedactURL(sourceURL), t.ID, t.Name, enabled, err)
-			return err
-		}
-		prev.Tunnels[t.ID] = state.TunnelState{Name: t.Name, Enabled: enabled}
+		fs.Backends[backendLabel] = bs
 	}
 
-	// Reconcile: tunnels previously seen but missing now are removed.
-	for tunnelID, ts := range prev.Tunnels {
-		if _, ok := currentTunnelIDs[tunnelID]; ok {
-			continue
-		}
-		if err := b.Remove(ctx, ts.Name); err != nil {
-			logger.Printf("remove failed source=%q tunnel=%q name=%q err=%v", feed.RedactURL(sourceURL), tunnelID, ts.Name, err)
-		}
-		delete(prev.Tunnels, tunnelID)
-	}
-
-	st.Feeds[feedID] = prev
+	st.Feeds[feedLabel] = fs
 	return nil
+}
+
+func resolveTunnelEnabled(docEnabled bool, feedOverride config.FeedTunnelConfig, backendOverride config.FeedTunnelConfig) bool {
+	enabled := docEnabled
+	if feedOverride.Enabled != nil {
+		enabled = *feedOverride.Enabled
+	}
+	if backendOverride.Enabled != nil {
+		enabled = *backendOverride.Enabled
+	}
+	return enabled
 }

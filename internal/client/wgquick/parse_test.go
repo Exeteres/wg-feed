@@ -64,3 +64,34 @@ func TestParse_InvalidPersistentKeepalive(t *testing.T) {
 		t.Fatalf("expected error")
 	}
 }
+
+func TestParse_StoresUnknownKeysAsExtras(t *testing.T) {
+	cfgText := `
+[Interface]
+PrivateKey = priv
+Jc = 3
+H1 = 42
+
+[Peer]
+PublicKey = pub1
+AdvancedSecurity = on
+`
+
+	cfg, err := Parse([]byte(cfgText))
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	if got := cfg.Interface.Extras["jc"]; got != "3" {
+		t.Fatalf("unexpected interface extra jc: %q", got)
+	}
+	if got := cfg.Interface.Extras["h1"]; got != "42" {
+		t.Fatalf("unexpected interface extra h1: %q", got)
+	}
+	if len(cfg.Peers) != 1 {
+		t.Fatalf("unexpected peers count: %d", len(cfg.Peers))
+	}
+	if got := cfg.Peers[0].Extras["advancedsecurity"]; got != "on" {
+		t.Fatalf("unexpected peer extra advancedsecurity: %q", got)
+	}
+}

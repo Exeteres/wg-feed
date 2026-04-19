@@ -4,7 +4,7 @@
   go_1_25,
   src ? ../.,
   version ? "0.0.0",
-  vendorHash ? "sha256-/DjVWAKxfqL8BviEXZcUQ3eBGAxv8DhkcudKrN26XJQ=",
+  vendorHash ? "sha256-wtmLjM2kD8PnfO9L/vVZWnG0jpE/GfOWBMYs3X9fJUQ=",
 }:
 buildGoModule {
   pname = "wg-feed";

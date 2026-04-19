@@ -1,0 +1,89 @@
+version: 2
+
+project_name: wg-feed
+
+builds:
+  - id: wg-feed-server
+    main: ./cmd/wg-feed-server
+    binary: wg-feed-server
+    env:
+      - CGO_ENABLED=0
+    goos:
+      - linux
+    goarch:
+      - amd64
+      - arm64
+
+  - id: wg-feed-upload
+    main: ./cmd/wg-feed-upload
+    binary: wg-feed-upload
+    env:
+      - CGO_ENABLED=0
+    goos:
+      - linux
+      - darwin
+      - windows
+    goarch:
+      - amd64
+      - arm64
+
+  - id: wg-feed-daemon
+    main: ./cmd/wg-feed-daemon
+    binary: wg-feed-daemon
+    env:
+      - CGO_ENABLED=0
+    goos:
+      - linux
+      - darwin
+      - windows
+    goarch:
+      - amd64
+      - arm64
+
+  - id: wg-feed-apply
+    main: ./cmd/wg-feed-apply
+    binary: wg-feed-apply
+    env:
+      - CGO_ENABLED=0
+    goos:
+      - linux
+      - darwin
+      - windows
+    goarch:
+      - amd64
+      - arm64
+
+  - id: wg-feed-installer
+    main: ./cmd/wg-feed-installer
+    binary: wg-feed-installer
+    env:
+      - CGO_ENABLED=0
+    goos:
+      - linux
+    goarch:
+      - amd64
+      - arm64
+
+archives:
+  - id: binaries
+    format: binary
+    ids:
+      - wg-feed-server
+      - wg-feed-upload
+      - wg-feed-daemon
+      - wg-feed-apply
+      - wg-feed-installer
+
+checksum:
+  name_template: checksums.txt
+
+changelog:
+  use: github
+  sort: asc
+  filters:
+    exclude:
+      - "^docs:"
+      - "^test:"
+      - "^chore:"
+      - "^ci:"
+      - "^refactor:"

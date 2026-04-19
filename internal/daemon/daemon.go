@@ -6,7 +6,9 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"log"
+	"log/slog"
+	"regexp"
+	"sort"
 	"strings"
 	"sync"
 	"time"
@@ -26,25 +28,74 @@ const (
 	streamRetryDelay     = 2 * time.Second
 )
 
-func Run(ctx context.Context, cfg config.Config, logger *log.Logger) error {
-	b, err := backend.New(cfg, logger)
-	if err != nil {
-		return err
-	}
+var transportURLRe = regexp.MustCompile(`https?://[^\s"']+`)
 
+type daemonFeed struct {
+	label      string
+	cfg        config.FeedConfig
+	backends   map[string]backend.Backend
+	decryptURL string
+}
+
+type daemon struct {
+	cfg    config.Config
+	logger *slog.Logger
+	feeds  map[string]daemonFeed
+
+	mu sync.Mutex
+
+	claimedMu sync.Mutex
+	claimed   map[string]string // feedID -> configured feed label
+}
+
+func Run(ctx context.Context, cfg config.Config, logger *slog.Logger) error {
 	d := &daemon{
 		cfg:    cfg,
-		b:      b,
 		logger: logger,
+		feeds:  map[string]daemonFeed{},
 	}
 
-	errCh := make(chan error, len(cfg.SetupURLs))
-	for _, url := range cfg.SetupURLs {
-		setupURL := url
-		go func() {
-			err := d.runFeed(ctx, setupURL)
+	labels := make([]string, 0, len(cfg.Feeds))
+	for label := range cfg.Feeds {
+		labels = append(labels, label)
+	}
+	sort.Strings(labels)
+
+	for _, label := range labels {
+		feedCfg := cfg.Feeds[label]
+		if !feedCfg.Sync.Enabled {
+			continue
+		}
+
+		backendSet := map[string]backend.Backend{}
+		for backendLabel, backendCfg := range feedCfg.Backends {
+			b, err := backend.NewForType(backendCfg.Type, logger)
 			if err != nil {
-				logger.Printf("feed loop exited feed=%q err=%v", feed.RedactURL(setupURL), err)
+				return fmt.Errorf("feed %s backend %s: %w", label, backendLabel, err)
+			}
+			backendSet[backendLabel] = b
+		}
+
+		d.feeds[label] = daemonFeed{
+			label:      label,
+			cfg:        feedCfg,
+			backends:   backendSet,
+			decryptURL: feedCfg.DecryptURL(),
+		}
+	}
+
+	if len(d.feeds) == 0 {
+		<-ctx.Done()
+		return ctx.Err()
+	}
+
+	errCh := make(chan error, len(d.feeds))
+	for _, feedRuntime := range d.feeds {
+		rf := feedRuntime
+		go func() {
+			err := d.runFeed(ctx, rf)
+			if err != nil {
+				logger.Error("feed loop exited", "feed_label", rf.label, "err", redactTransportError(err))
 			}
 			errCh <- err
 		}()
@@ -58,34 +109,21 @@ func Run(ctx context.Context, cfg config.Config, logger *log.Logger) error {
 	}
 }
 
-type daemon struct {
-	cfg    config.Config
-	b      backend.Backend
-	logger *log.Logger
-
-	mu sync.Mutex
-
-	claimedMu sync.Mutex
-	claimed   map[string]string // feedID -> setupURL
-}
-
-func (d *daemon) runFeed(ctx context.Context, setupURL string) error {
-	setupURL = strings.TrimSpace(setupURL)
+func (d *daemon) runFeed(ctx context.Context, rf daemonFeed) error {
+	feedLabel := rf.label
 	var feedID string
-	var endpoints []string
+	endpoints := append([]string(nil), rf.cfg.Sync.Endpoints...)
 	var lastRevision string
 	var lastTTL *int
 	var nextCacheReconcile time.Time
-	var didStartupReconcile bool
 
-	// Best-effort: resolve feedID + endpoints from cached encrypted_data before any network bootstrap.
-	resolvedID, resolvedEndpoints, err := d.resolveFromStateCache(setupURL)
+	resolvedID, resolvedEndpoints, err := d.resolveFromStateCache(feedLabel, rf.decryptURL)
 	if err != nil {
 		return err
 	}
 	if strings.TrimSpace(resolvedID) != "" {
 		feedID = strings.TrimSpace(resolvedID)
-		if !d.claimFeedID(feedID, setupURL) {
+		if !d.claimFeedID(feedID, feedLabel) {
 			return nil
 		}
 	}
@@ -93,68 +131,38 @@ func (d *daemon) runFeed(ctx context.Context, setupURL string) error {
 		endpoints = resolvedEndpoints
 	}
 
-	// Force a reconciliation from cached encrypted data once on startup.
-	// This lets users restart the daemon to re-apply the last known-good config even if the
-	// feed endpoints are temporarily unreachable.
-	if !didStartupReconcile {
-		if err := d.reconcileFromCacheOnStart(ctx, setupURL, feedID); err == nil {
-			nextCacheReconcile = time.Now().Add(defaultReconcileTick)
-		}
-		didStartupReconcile = true
+	if err := d.reconcileFromCacheOnStart(ctx, rf, feedID); err == nil {
+		nextCacheReconcile = time.Now().Add(defaultReconcileTick)
 	}
+
+	if strings.EqualFold(string(rf.cfg.Sync.Mode), string(config.SyncModePolling)) {
+		d.logger.Info("feed loop started", "feed_label", feedLabel, "mode", "polling", "endpoints", len(endpoints))
+		return d.pollLoop(ctx, rf, &feedID, &endpoints, &lastRevision, &lastTTL, &nextCacheReconcile)
+	}
+	d.logger.Info("feed loop started", "feed_label", feedLabel, "mode", "sse", "endpoints", len(endpoints))
 
 	for {
 		if ctx.Err() != nil {
 			return ctx.Err()
 		}
 
-		// If we don't yet know endpoints, bootstrap once using the setup URL.
-		if len(endpoints) == 0 {
-			res, _, err := feed.FetchAnyEndpoints(ctx, []string{setupURL}, setupURL, "")
-			if err != nil {
-				if wf, ok := feed.AsWGFeedError(err); ok && !wf.Retriable {
-					return err
-				}
-				d.logger.Printf("bootstrap fetch failed feed=%q err=%v", feed.RedactURL(setupURL), err)
-				if err := d.maybeReconcileFromCache(ctx, setupURL, feedID, nextCacheReconcile); err == nil {
-					nextCacheReconcile = time.Now().Add(defaultReconcileTick)
-				}
-				sleep(ctx, defaultTickOnFailure)
-				continue
-			}
-			if feedID == "" {
-				feedID = strings.TrimSpace(res.Feed.ID)
-				if feedID == "" {
-					return fmt.Errorf("missing feed id")
-				}
-				if !d.claimFeedID(feedID, setupURL) {
-					return nil
-				}
-			}
-			endpoints = res.Feed.Endpoints
-			cached := ""
-			if res.Encrypted {
-				cached = res.EncryptedData
-			}
-			if err := d.applyRemoteUpdate(ctx, setupURL, setupURL, res.Feed, res.Revision, res.TTLSeconds, cached); err != nil {
-				return err
-			}
-			lastRevision = strings.TrimSpace(res.Revision)
-			v := res.TTLSeconds
-			lastTTL = &v
-			continue
+		if strings.TrimSpace(feedID) != "" {
+			_ = d.withStateRead(func(st state.State) error {
+				endpoints = st.OrderEndpoints(feedLabel, endpoints)
+				return nil
+			})
 		}
 
-		// Prefer SSE when available.
 		err := feed.StreamSSEAnyEndpoints(ctx, endpoints, func(endpoint string, data []byte) error {
-			doc, rev, ttl, encryptedData, err := decodeAndValidateSuccess(setupURL, data)
+			doc, rev, ttl, encryptedData, err := decodeAndValidateSuccess(rf.decryptURL, data)
 			if err != nil {
 				if wf, ok := feed.AsWGFeedError(err); ok && !wf.Retriable {
 					return err
 				}
-				d.logger.Printf("stream event invalid feed=%q err=%v", feed.RedactURL(endpoint), err)
+				d.logger.Warn("stream event invalid", "feed_label", feedLabel, "endpoint", feed.RedactURL(endpoint), "err", redactTransportError(err))
 				return nil
 			}
+
 			lastTTL = &ttl
 			lastRevision = strings.TrimSpace(rev)
 			if feedID == "" {
@@ -162,14 +170,16 @@ func (d *daemon) runFeed(ctx context.Context, setupURL string) error {
 				if feedID == "" {
 					return fmt.Errorf("missing feed id")
 				}
-				if !d.claimFeedID(feedID, setupURL) {
+				if !d.claimFeedID(feedID, feedLabel) {
 					return nil
 				}
 			}
 			endpoints = doc.Endpoints
-			if err := d.applyRemoteUpdate(ctx, endpoint, setupURL, doc, rev, ttl, encryptedData); err != nil {
+			d.logger.Debug("sse feed event received", "feed_label", feedLabel, "endpoint", feed.RedactURL(endpoint), "revision", strings.TrimSpace(rev), "ttl_seconds", ttl, "encrypted", strings.TrimSpace(encryptedData) != "")
+			if err := d.applyRemoteUpdate(ctx, rf, endpoint, doc, rev, ttl, encryptedData); err != nil {
 				return err
 			}
+			d.logger.Debug("sse feed event applied", "feed_label", feedLabel, "revision", strings.TrimSpace(rev), "feed_id", strings.TrimSpace(doc.ID), "tunnels", len(doc.Tunnels))
 			return nil
 		})
 
@@ -177,100 +187,87 @@ func (d *daemon) runFeed(ctx context.Context, setupURL string) error {
 			return ctx.Err()
 		}
 		if errors.Is(err, feed.ErrStreamNotSupported) {
-			res, _, fetchErr := feed.FetchAnyEndpoints(ctx, endpoints, setupURL, "")
+			res, _, fetchErr := feed.FetchAnyEndpoints(ctx, endpoints, rf.decryptURL, "")
 			if fetchErr == nil && res.SupportsSSE {
-				d.logger.Printf("stream not supported for %s but supports_sse=true; retrying stream", feed.RedactURL(setupURL))
+				d.logger.Info("stream not supported but supports_sse=true; retrying", "feed_label", feedLabel)
 				continue
 			}
-			d.logger.Printf("stream not supported for %s; using polling", feed.RedactURL(setupURL))
-			return d.pollLoop(ctx, setupURL, &feedID, &endpoints, &lastRevision, &lastTTL, &nextCacheReconcile)
+			d.logger.Info("stream not supported; switching to polling", "feed_label", feedLabel)
+			return d.pollLoop(ctx, rf, &feedID, &endpoints, &lastRevision, &lastTTL, &nextCacheReconcile)
 		}
 		if wf, ok := feed.AsWGFeedError(err); ok && !wf.Retriable {
-			d.logger.Printf("wg-feed error (non-retriable) feed=%q message=%q; stopping automatic reconnect", feed.RedactURL(setupURL), wf.Message)
+			d.logger.Error("wg-feed non-retriable error; stopping reconnect", "feed_label", feedLabel, "message", wf.Message)
 			<-ctx.Done()
 			return ctx.Err()
 		}
 
-		// Any other error: retry SSE after delay.
-		d.logger.Printf("stream error for %s; retrying: %v", feed.RedactURL(setupURL), err)
-		if err := d.maybeReconcileFromCache(ctx, setupURL, feedID, nextCacheReconcile); err == nil {
+		d.logger.Warn("stream error; retrying", "feed_label", feedLabel, "err", redactTransportError(err))
+		if err := d.maybeReconcileFromCache(ctx, rf, feedID, nextCacheReconcile); err == nil {
 			nextCacheReconcile = time.Now().Add(defaultReconcileTick)
 		}
+		d.logger.Debug("stream retry sleep", "feed_label", feedLabel, "sleep", streamRetryDelay.String())
 		sleep(ctx, streamRetryDelay)
 	}
 }
 
-func (d *daemon) resolveFromStateCache(setupURL string) (string, []string, error) {
-	setupURL = strings.TrimSpace(setupURL)
+func (d *daemon) resolveFromStateCache(feedLabel string, decryptURL string) (string, []string, error) {
 	var feedID string
 	var endpoints []string
 	err := d.withStateSave(func(st *state.State) error {
-		key, err := st.SubscriptionURLKey(setupURL)
-		if err != nil {
-			return err
-		}
-		feedID = strings.TrimSpace(st.SetupURLMap[key])
-		if feedID == "" {
-			return nil
-		}
-		fs, ok := st.Feeds[feedID]
+		fs, ok := st.Feeds[feedLabel]
 		if !ok {
 			return nil
 		}
-		if strings.TrimSpace(fs.CachedEncryptedData) == "" {
+		feedID = strings.TrimSpace(fs.ID)
+		if feedID == "" || strings.TrimSpace(fs.CachedEncryptedData) == "" {
 			return nil
 		}
-		doc, err := feed.DecryptFeedDocumentForSetupURL(setupURL, fs.CachedEncryptedData)
+		doc, err := feed.DecryptFeedDocumentForURL(decryptURL, fs.CachedEncryptedData)
 		if err != nil {
 			return err
 		}
-		endpoints = st.OrderEndpoints(feedID, doc.Endpoints)
-		// If the cached doc ID doesn't match, prefer the cached doc and update the mapping.
+		endpoints = st.OrderEndpoints(feedLabel, doc.Endpoints)
 		cachedID := strings.TrimSpace(doc.ID)
 		if cachedID != "" && cachedID != feedID {
-			st.SetupURLMap[key] = cachedID
+			fs.ID = cachedID
+			st.Feeds[feedLabel] = fs
 			feedID = cachedID
-			endpoints = st.OrderEndpoints(feedID, doc.Endpoints)
+			endpoints = st.OrderEndpoints(feedLabel, doc.Endpoints)
 		}
 		return nil
 	})
 	if err != nil {
 		return "", nil, err
 	}
-	return feedID, endpoints, nil
+	return strings.TrimSpace(feedID), endpoints, nil
 }
 
-func (d *daemon) claimFeedID(feedID, setupURL string) bool {
+func (d *daemon) claimFeedID(feedID, feedLabel string) bool {
 	d.claimedMu.Lock()
 	defer d.claimedMu.Unlock()
 	if d.claimed == nil {
 		d.claimed = map[string]string{}
 	}
 	if existing, ok := d.claimed[feedID]; ok {
-		if existing != setupURL {
-			d.logger.Printf("duplicate setup url ignored: feed_id=%q url=%q already_claimed_by=%q", feedID, feed.RedactURL(setupURL), feed.RedactURL(existing))
+		if existing != feedLabel {
+			d.logger.Info("duplicate feed ignored", "feed_id", feedID, "feed_label", feedLabel, "already_claimed_by", existing)
 		}
 		return false
 	}
-	d.claimed[feedID] = setupURL
+	d.claimed[feedID] = feedLabel
 	return true
 }
 
-func (d *daemon) reconcileFromCacheOnStart(ctx context.Context, setupURL string, feedID string) error {
+func (d *daemon) reconcileFromCacheOnStart(ctx context.Context, rf daemonFeed, feedID string) error {
 	feedID = strings.TrimSpace(feedID)
 	if feedID == "" {
 		return fmt.Errorf("no cached config")
 	}
-	if err := d.maybeReconcileFromCache(ctx, setupURL, feedID, time.Time{}); err != nil {
-		// Non-fatal: startup should continue even if cache reconcile isn't possible.
-		if d.logger != nil {
-			d.logger.Printf("startup cache reconcile skipped feed=%q err=%v", feed.RedactURL(setupURL), err)
-		}
+	if err := d.maybeReconcileFromCache(ctx, rf, feedID, time.Time{}); err != nil {
+		d.logger.Debug("startup cache reconcile skipped", "feed_label", rf.label, "err", redactTransportError(err))
 		return err
 	}
-	if d.logger != nil {
-		d.logger.Printf("startup cache reconcile applied feed=%q", feed.RedactURL(setupURL))
-	}
+	d.logger.Debug("startup cache reconcile applied", "feed_label", rf.label)
 	return nil
 }
 
@@ -301,54 +298,51 @@ func (d *daemon) withStateRead(fn func(st state.State) error) error {
 	return fn(st)
 }
 
-func (d *daemon) pollLoop(ctx context.Context, setupURL string, feedID *string, endpoints *[]string, lastRevision *string, lastTTL **int, nextCacheReconcile *time.Time) error {
+func (d *daemon) pollLoop(ctx context.Context, rf daemonFeed, feedID *string, endpoints *[]string, lastRevision *string, lastTTL **int, nextCacheReconcile *time.Time) error {
+	d.logger.Debug("poll loop active", "feed_label", rf.label, "endpoints", len(*endpoints))
 	for {
 		if ctx.Err() != nil {
 			return ctx.Err()
 		}
 
-		// Prefer endpoints that previously worked (persisted as salted hashes in state).
-		if strings.TrimSpace(*feedID) != "" {
-			_ = d.withStateRead(func(st state.State) error {
-				ordered := st.OrderEndpoints(strings.TrimSpace(*feedID), *endpoints)
-				*endpoints = ordered
-				return nil
-			})
-		}
+		_ = d.withStateRead(func(st state.State) error {
+			*endpoints = st.OrderEndpoints(rf.label, *endpoints)
+			return nil
+		})
 
-		res, usedEndpoint, err := feed.FetchAnyEndpoints(ctx, *endpoints, setupURL, strings.TrimSpace(*lastRevision))
+		res, usedEndpoint, err := feed.FetchAnyEndpoints(ctx, *endpoints, rf.decryptURL, strings.TrimSpace(*lastRevision))
 		if err != nil {
 			if wf, ok := feed.AsWGFeedError(err); ok && !wf.Retriable {
-				d.logger.Printf("wg-feed error (non-retriable) feed=%q message=%q; stopping automatic polling", feed.RedactURL(setupURL), wf.Message)
+				d.logger.Error("wg-feed non-retriable error; stopping polling", "feed_label", rf.label, "message", wf.Message)
 				<-ctx.Done()
 				return ctx.Err()
 			}
-			d.logger.Printf("poll fetch failed feed=%q err=%v", feed.RedactURL(setupURL), err)
-			if err := d.maybeReconcileFromCache(ctx, setupURL, strings.TrimSpace(*feedID), *nextCacheReconcile); err == nil {
+			d.logger.Warn("poll fetch failed", "feed_label", rf.label, "err", redactTransportError(err))
+			if err := d.maybeReconcileFromCache(ctx, rf, strings.TrimSpace(*feedID), *nextCacheReconcile); err == nil {
 				*nextCacheReconcile = time.Now().Add(defaultReconcileTick)
 			}
+			d.logger.Debug("poll failure sleep", "feed_label", rf.label, "sleep", defaultTickOnFailure.String())
 			sleep(ctx, defaultTickOnFailure)
 			continue
 		}
 		if res.NotModified {
-			// Successful sync: no document changes.
-			s := defaultTickOnFailure
-			if *lastTTL != nil && **lastTTL > 0 {
-				s = time.Duration(**lastTTL) * time.Second
-			}
+			s := d.pollSleep(rf, *lastTTL)
 			if s < minTick {
 				s = minTick
 			}
+			d.logger.Debug("poll not modified", "feed_label", rf.label, "revision", strings.TrimSpace(*lastRevision), "sleep", s.String())
 			sleep(ctx, s)
 			continue
 		}
+		d.logger.Debug("poll fetch succeeded", "feed_label", rf.label, "endpoint", feed.RedactURL(usedEndpoint), "revision", strings.TrimSpace(res.Revision), "ttl_seconds", res.TTLSeconds, "encrypted", res.Encrypted)
+
 		*lastRevision = strings.TrimSpace(res.Revision)
 		if *feedID == "" {
 			*feedID = strings.TrimSpace(res.Feed.ID)
 			if *feedID == "" {
 				return fmt.Errorf("missing feed id")
 			}
-			if !d.claimFeedID(*feedID, setupURL) {
+			if !d.claimFeedID(*feedID, rf.label) {
 				return nil
 			}
 		}
@@ -360,24 +354,33 @@ func (d *daemon) pollLoop(ctx context.Context, setupURL string, feedID *string, 
 		if res.Encrypted {
 			cached = res.EncryptedData
 		}
-		if err := d.applyRemoteUpdate(ctx, usedEndpoint, setupURL, res.Feed, res.Revision, res.TTLSeconds, cached); err != nil {
+		if err := d.applyRemoteUpdate(ctx, rf, usedEndpoint, res.Feed, res.Revision, res.TTLSeconds, cached); err != nil {
 			if wf, ok := feed.AsWGFeedError(err); ok && !wf.Retriable {
-				d.logger.Printf("wg-feed error (non-retriable) feed=%q message=%q; stopping automatic polling", feed.RedactURL(setupURL), wf.Message)
+				d.logger.Error("wg-feed non-retriable error; stopping polling", "feed_label", rf.label, "message", wf.Message)
 				<-ctx.Done()
 				return ctx.Err()
 			}
-			d.logger.Printf("reconcile failed feed=%q err=%v", feed.RedactURL(setupURL), err)
+			d.logger.Warn("reconcile failed", "feed_label", rf.label, "err", redactTransportError(err))
 		}
+		d.logger.Debug("poll update applied", "feed_label", rf.label, "feed_id", strings.TrimSpace(res.Feed.ID), "tunnels", len(res.Feed.Tunnels), "revision", strings.TrimSpace(res.Revision))
 
-		s := defaultTickOnFailure
-		if *lastTTL != nil && **lastTTL > 0 {
-			s = time.Duration(**lastTTL) * time.Second
-		}
+		s := d.pollSleep(rf, *lastTTL)
 		if s < minTick {
 			s = minTick
 		}
+		d.logger.Debug("poll steady sleep", "feed_label", rf.label, "sleep", s.String())
 		sleep(ctx, s)
 	}
+}
+
+func (d *daemon) pollSleep(rf daemonFeed, lastTTL *int) time.Duration {
+	if rf.cfg.Sync.Polling.Interval > 0 {
+		return time.Duration(rf.cfg.Sync.Polling.Interval) * time.Second
+	}
+	if lastTTL != nil && *lastTTL > 0 {
+		return time.Duration(*lastTTL) * time.Second
+	}
+	return defaultTickOnFailure
 }
 
 func sleep(ctx context.Context, d time.Duration) {
@@ -389,7 +392,16 @@ func sleep(ctx context.Context, d time.Duration) {
 	}
 }
 
-func decodeAndValidateSuccess(setupURL string, body []byte) (model.FeedDocument, string, int, string, error) {
+func redactTransportError(err error) string {
+	if err == nil {
+		return ""
+	}
+	return transportURLRe.ReplaceAllStringFunc(err.Error(), func(raw string) string {
+		return feed.RedactURL(raw)
+	})
+}
+
+func decodeAndValidateSuccess(decryptURL string, body []byte) (model.FeedDocument, string, int, string, error) {
 	var sr model.SuccessResponse
 	dec := json.NewDecoder(bytes.NewReader(body))
 	if err := dec.Decode(&sr); err != nil {
@@ -399,7 +411,7 @@ func decodeAndValidateSuccess(setupURL string, body []byte) (model.FeedDocument,
 		return model.FeedDocument{}, "", 0, "", err
 	}
 	if sr.Encrypted {
-		doc, err := feed.DecryptFeedDocumentForSetupURL(setupURL, sr.EncryptedData)
+		doc, err := feed.DecryptFeedDocumentForURL(decryptURL, sr.EncryptedData)
 		if err != nil {
 			return model.FeedDocument{}, "", 0, "", err
 		}
@@ -413,51 +425,59 @@ func decodeAndValidateSuccess(setupURL string, body []byte) (model.FeedDocument,
 	return *sr.Data, rev, sr.TTLSeconds, "", nil
 }
 
-func (d *daemon) applyRemoteUpdate(ctx context.Context, requestURL string, setupURL string, doc model.FeedDocument, revision string, ttl int, cachedEncryptedData string) error {
+func (d *daemon) applyRemoteUpdate(ctx context.Context, rf daemonFeed, requestURL string, doc model.FeedDocument, revision string, ttl int, cachedEncryptedData string) error {
 	feedID := strings.TrimSpace(doc.ID)
 	if feedID == "" {
 		return fmt.Errorf("missing feed id")
 	}
 	if msg := strings.TrimSpace(doc.Warning); msg != "" {
-		d.logger.Printf("feed warning: feed=%q message=%q", feed.RedactURL(setupURL), msg)
+		d.logger.Warn("feed warning", "feed_label", rf.label, "message", msg)
 	}
 	return d.withStateSave(func(st *state.State) error {
-		key, err := st.SubscriptionURLKey(setupURL)
-		if err != nil {
-			return err
+		if st.Feeds == nil {
+			st.Feeds = map[string]state.FeedState{}
 		}
-		st.SetupURLMap[key] = feedID
-
-		fs := st.Feeds[feedID]
-		if fs.Tunnels == nil {
-			fs.Tunnels = map[string]state.TunnelState{}
+		fs := st.Feeds[rf.label]
+		if fs.Backends == nil {
+			fs.Backends = map[string]state.BackendState{}
 		}
+		fs.ID = feedID
+		st.Feeds[rf.label] = fs
 
-		// Update endpoint preference order by promoting the endpoint that successfully produced this update.
-		st.ReconcileEndpointOrder(feedID, doc.Endpoints, requestURL)
-		fs = st.Feeds[feedID]
+		st.ReconcileEndpointOrder(rf.label, doc.Endpoints, requestURL)
+		fs = st.Feeds[rf.label]
+		if fs.Backends == nil {
+			fs.Backends = map[string]state.BackendState{}
+		}
 
 		v := ttl
 		fs.TTLSeconds = &v
 		fs.CachedEncryptedData = strings.TrimSpace(cachedEncryptedData)
-		st.Feeds[feedID] = fs
+		for backendLabel, backendCfg := range rf.cfg.Backends {
+			bs := fs.Backends[backendLabel]
+			if bs.Tunnels == nil {
+				bs.Tunnels = map[string]state.TunnelState{}
+			}
+			bs.Type = string(backendCfg.Type)
+			fs.Backends[backendLabel] = bs
+		}
+		st.Feeds[rf.label] = fs
 
-		// Spec: only reconcile when revision changed since last successfully reconciled.
-		if strings.TrimSpace(revision) != "" && strings.TrimSpace(fs.LastReconciledRevision) == strings.TrimSpace(revision) {
+		if strings.TrimSpace(revision) != "" && strings.TrimSpace(fs.LastReconciledRevision) == strings.TrimSpace(revision) && !rf.cfg.HasAnyEnabledOverride() {
 			return nil
 		}
 
-		if err := client.ApplyFeed(ctx, d.cfg, d.b, st, requestURL, doc, d.logger); err != nil {
+		if err := client.ApplyFeed(ctx, st, rf.label, rf.backends, doc, rf.cfg.Tunnels, rf.cfg.BackendTunnelOverrides(), d.logger); err != nil {
 			return err
 		}
-		fs = st.Feeds[feedID]
+		fs = st.Feeds[rf.label]
 		fs.LastReconciledRevision = strings.TrimSpace(revision)
-		st.Feeds[feedID] = fs
+		st.Feeds[rf.label] = fs
 		return nil
 	})
 }
 
-func (d *daemon) maybeReconcileFromCache(ctx context.Context, setupURL string, feedID string, notBefore time.Time) error {
+func (d *daemon) maybeReconcileFromCache(ctx context.Context, rf daemonFeed, feedID string, notBefore time.Time) error {
 	if !notBefore.IsZero() && time.Now().Before(notBefore) {
 		return fmt.Errorf("cache reconcile throttled")
 	}
@@ -466,18 +486,20 @@ func (d *daemon) maybeReconcileFromCache(ctx context.Context, setupURL string, f
 		return fmt.Errorf("no cached config")
 	}
 	return d.withStateSave(func(st *state.State) error {
-		fs, ok := st.Feeds[feedID]
+		fs, ok := st.Feeds[rf.label]
 		if !ok {
 			return fmt.Errorf("no cached config")
+		}
+		if strings.TrimSpace(fs.ID) != "" && strings.TrimSpace(fs.ID) != feedID {
+			return fmt.Errorf("cached feed id mismatch")
 		}
 		if strings.TrimSpace(fs.CachedEncryptedData) == "" {
 			return fmt.Errorf("no cached config")
 		}
-		doc, err := feed.DecryptFeedDocumentForSetupURL(setupURL, fs.CachedEncryptedData)
+		doc, err := feed.DecryptFeedDocumentForURL(rf.decryptURL, fs.CachedEncryptedData)
 		if err != nil {
 			return err
 		}
-		// Forced reconciliation while offline.
-		return client.ApplyFeed(ctx, d.cfg, d.b, st, setupURL, doc, d.logger)
+		return client.ApplyFeed(ctx, st, rf.label, rf.backends, doc, rf.cfg.Tunnels, rf.cfg.BackendTunnelOverrides(), d.logger)
 	})
 }

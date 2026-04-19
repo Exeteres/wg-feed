@@ -3,57 +3,83 @@ package wgquick
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"errors"
-	"log"
+	"log/slog"
 	"net/netip"
 	"os"
 	"path/filepath"
-	"regexp"
 	"slices"
 	"strings"
 
+	"github.com/exeteres/wg-feed/internal/client/backend/shared"
 	"github.com/exeteres/wg-feed/internal/client/execx"
-	clientwgquick "github.com/exeteres/wg-feed/internal/client/wgquick"
+	"github.com/exeteres/wg-feed/internal/client/linuxcmd"
+	"github.com/exeteres/wg-feed/internal/client/namegen"
+	"github.com/exeteres/wg-feed/internal/client/state"
+	"github.com/exeteres/wg-feed/internal/client/wgquick"
 )
-
-type Runner interface {
-	Run(ctx context.Context, name string, args ...string) (execx.Result, error)
-}
 
 type Backend struct {
-	runner Runner
-	logger *log.Logger
+	runner execx.Runner
+	logger *slog.Logger
 }
 
-type commandSet struct {
-	wg      string
-	wgQuick string
+type tunnelData struct {
+	DeviceName string `json:"device_name"`
 }
 
-var (
-	defaultCommands = commandSet{wg: "wg", wgQuick: "wg-quick"}
-	amneziaCommands = commandSet{wg: "awg", wgQuick: "awg-quick"}
-
-	amneziaKeyRe = regexp.MustCompile(`(?i)^\s*(i[1-5]|s[1-4]|jc|jmin|jmax|h[1-4])\s*=`)
-)
-
-func New(runner Runner, logger *log.Logger) *Backend {
+func New(runner execx.Runner, logger *slog.Logger) *Backend {
 	return &Backend{runner: runner, logger: logger}
 }
 
-func (b *Backend) Apply(ctx context.Context, name string, wgQuickConfig string, enabled bool, forced bool) error {
-	iface := strings.TrimSpace(name)
-	if iface == "" {
-		return errors.New("wg-quick backend requires a non-empty tunnel name")
+func (b *Backend) Apply(ctx context.Context, tunnel shared.ResolvedTunnel, state state.TunnelState) (state.TunnelState, error) {
+	b.logger.Debug("wgquick apply started", "tunnel_id", tunnel.ID, "tunnel_name", tunnel.Name, "enabled", tunnel.EffectiveEnabled)
+	enabled := tunnel.EffectiveEnabled
+	tunnelData := tunnelData{}
+	if len(state.Data) > 0 {
+		_ = json.Unmarshal(state.Data, &tunnelData)
 	}
+	if !enabled {
+		iface := strings.TrimSpace(tunnelData.DeviceName)
+		if iface != "" {
+			b.logger.Debug("wgquick down interface", "iface", iface, "tool", "awg-quick")
+			_, _ = b.runner.Run(ctx, "awg-quick", "down", iface)
+			b.logger.Debug("wgquick down interface", "iface", iface, "tool", "wg-quick")
+			_, _ = b.runner.Run(ctx, "wg-quick", "down", iface)
+		}
+		state.Data = nil
+		b.logger.Debug("wgquick apply disabled completed", "tunnel_id", tunnel.ID)
+		return state, nil
+	}
+
+	iface := strings.TrimSpace(tunnelData.DeviceName)
+	if iface == "" {
+		effective, err := namegen.EffectiveName(strings.TrimSpace(tunnel.Name), func(candidate string) (bool, error) {
+			return b.interfaceOccupied(ctx, candidate)
+		})
+		if err != nil {
+			return state, err
+		}
+		iface = effective
+	}
+	if iface == "" {
+		return state, errors.New("wg-quick backend requires a non-empty tunnel name")
+	}
+	tunnelData.DeviceName = iface
+	dataBytes, err := json.Marshal(tunnelData)
+	if err != nil {
+		return state, err
+	}
+	wgQuickConfig := tunnel.WGQuickConfig
 	if !strings.HasSuffix(wgQuickConfig, "\n") {
 		wgQuickConfig += "\n"
 	}
-	commands := commandSetForConfig(wgQuickConfig)
+	commands := linuxcmd.CommandSetForConfig(wgQuickConfig)
 
 	tmpDir, err := os.MkdirTemp("", "wg-feed-*")
 	if err != nil {
-		return err
+		return state, err
 	}
 	defer func() {
 		_ = os.RemoveAll(tmpDir)
@@ -61,80 +87,72 @@ func (b *Backend) Apply(ctx context.Context, name string, wgQuickConfig string, 
 
 	configPath := filepath.Join(tmpDir, iface+".conf")
 	if err := os.WriteFile(configPath, []byte(wgQuickConfig), 0o600); err != nil {
-		return err
+		return state, err
 	}
 
-	if enabled {
-		if isUp(ctx, b.runner, iface, commands) {
-			if ok := bestEffortDeviceUpdate(ctx, b, configPath, iface, commands); ok {
-				return nil
-			}
+	if linuxcmd.IsUp(ctx, b.runner, iface, commands) {
+		if ok := bestEffortDeviceUpdate(ctx, b, configPath, iface, commands); ok {
+			state.Data = dataBytes
+			return state, nil
 		}
-		// Fall back to wg-quick (down/up) when interface isn't up or device update fails.
-		_, _ = b.runner.Run(ctx, commands.wgQuick, "down", iface)
-		_, err := b.runner.Run(ctx, commands.wgQuick, "up", configPath)
-		return err
 	}
-	_, err = b.runner.Run(ctx, commands.wgQuick, "down", iface)
-	return err
+
+	// Fall back to wg-quick (down/up) when interface isn't up or device update fails.
+	b.logger.Debug("wgquick down interface before up", "iface", iface, "tool", commands.WGQuick)
+	_, _ = b.runner.Run(ctx, commands.WGQuick, "down", iface)
+	b.logger.Debug("wgquick up interface", "iface", iface, "tool", commands.WGQuick, "config_path", configPath)
+	if _, err := b.runner.Run(ctx, commands.WGQuick, "up", configPath); err != nil {
+		return state, err
+	}
+	state.Data = dataBytes
+	b.logger.Debug("wgquick apply completed", "tunnel_id", tunnel.ID, "iface", iface)
+	return state, nil
 }
 
-func (b *Backend) Remove(ctx context.Context, name string) error {
-	iface := strings.TrimSpace(name)
+func (b *Backend) Remove(ctx context.Context, state state.TunnelState) error {
+	tunnelData := tunnelData{}
+	_ = json.Unmarshal(state.Data, &tunnelData)
+	iface := strings.TrimSpace(tunnelData.DeviceName)
 	if iface == "" {
 		return nil
 	}
+	b.logger.Debug("wgquick remove down interface", "iface", iface, "tool", "awg-quick")
 	_, _ = b.runner.Run(ctx, "awg-quick", "down", iface)
+	b.logger.Debug("wgquick remove down interface", "iface", iface, "tool", "wg-quick")
 	_, _ = b.runner.Run(ctx, "wg-quick", "down", iface)
+	b.logger.Debug("wgquick remove completed", "iface", iface)
 	return nil
 }
 
-func commandSetForConfig(wgQuickConfig string) commandSet {
-	if hasAmneziaExtensions(wgQuickConfig) {
-		return amneziaCommands
+func (b *Backend) interfaceOccupied(ctx context.Context, iface string) (bool, error) {
+	res, err := b.runner.Run(ctx, "ip", "-o", "link", "show", "dev", iface)
+	if err != nil {
+		return false, err
 	}
-	return defaultCommands
+	return strings.TrimSpace(res.Stdout) != "", nil
 }
 
-func hasAmneziaExtensions(wgQuickConfig string) bool {
-	for _, line := range strings.Split(wgQuickConfig, "\n") {
-		trimmed := strings.TrimSpace(line)
-		if trimmed == "" || strings.HasPrefix(trimmed, "#") || strings.HasPrefix(trimmed, ";") {
-			continue
-		}
-		if amneziaKeyRe.MatchString(trimmed) {
-			return true
-		}
-	}
-	return false
-}
-
-func isUp(ctx context.Context, runner Runner, iface string, commands commandSet) bool {
-	_, err := runner.Run(ctx, commands.wg, "show", iface)
-	return err == nil
-}
-
-func bestEffortDeviceUpdate(ctx context.Context, b *Backend, configPath string, iface string, commands commandSet) bool {
+func bestEffortDeviceUpdate(ctx context.Context, b *Backend, configPath string, iface string, commands linuxcmd.CommandSet) bool {
 	oldAllowed, err := currentAllowedIPPrefixes(ctx, b.runner, iface, commands)
 	if err != nil {
-		b.logf("wg showconf failed iface=%q err=%v", iface, err)
+		b.logger.Debug("wg showconf failed", "iface", iface, "err", err)
 		oldAllowed = nil
 	}
 
-	stripRes, err := b.runner.Run(ctx, commands.wgQuick, "strip", configPath)
+	stripRes, err := b.runner.Run(ctx, commands.WGQuick, "strip", configPath)
 	if err != nil {
-		b.logf("wg-quick strip failed iface=%q err=%v", iface, err)
+		b.logger.Debug("wg-quick strip failed", "iface", iface, "err", err)
 		return false
 	}
 	stripped := strings.TrimSpace(stripRes.Stdout)
 	if stripped == "" {
-		b.logf("wg-quick strip returned empty config iface=%q", iface)
+		b.logger.Debug("wg-quick strip returned empty config", "iface", iface)
 		return false
 	}
 
-	newAllowed, err := allowedIPPrefixesFromConfig(stripped)
+	newAllowed, err := wgquick.AllowedIPPrefixSetFromText(stripped)
 	if err != nil {
-		b.logf("parse stripped config failed iface=%q err=%v", iface, err)
+		b.logger.Debug("parse stripped config failed", "iface", iface, "err", err)
 		return false
 	}
 
@@ -159,63 +177,43 @@ func bestEffortDeviceUpdate(ctx context.Context, b *Backend, configPath string, 
 	}
 
 	// Prefer syncconf (removes peers not in config); fall back to setconf.
-	if _, err := b.runner.Run(ctx, commands.wg, "syncconf", iface, tmp); err == nil {
+	b.logger.Debug("wgquick syncconf", "iface", iface, "config_path", tmp, "tool", commands.WG)
+	if _, err := b.runner.Run(ctx, commands.WG, "syncconf", iface, tmp); err == nil {
 		if err := reconcileAllowedIPRoutes(ctx, b, iface, oldAllowed, newAllowed); err != nil {
-			b.logf("route reconciliation failed after syncconf iface=%q err=%v", iface, err)
+			b.logger.Debug("route reconciliation failed after syncconf", "iface", iface, "err", err)
 			return false
 		}
 		return true
 	} else {
-		b.logf("wg syncconf failed iface=%q err=%v", iface, err)
+		b.logger.Debug("wg syncconf failed", "iface", iface, "err", err)
 	}
-	if _, err := b.runner.Run(ctx, commands.wg, "setconf", iface, tmp); err == nil {
+	b.logger.Debug("wgquick setconf", "iface", iface, "config_path", tmp, "tool", commands.WG)
+	if _, err := b.runner.Run(ctx, commands.WG, "setconf", iface, tmp); err == nil {
 		if err := reconcileAllowedIPRoutes(ctx, b, iface, oldAllowed, newAllowed); err != nil {
-			b.logf("route reconciliation failed after setconf iface=%q err=%v", iface, err)
+			b.logger.Debug("route reconciliation failed after setconf", "iface", iface, "err", err)
 			return false
 		}
 		return true
 	} else {
-		b.logf("wg setconf failed iface=%q err=%v", iface, err)
+		b.logger.Debug("wg setconf failed", "iface", iface, "err", err)
 	}
 	return false
 }
 
-func currentAllowedIPPrefixes(ctx context.Context, runner Runner, iface string, commands commandSet) (map[netip.Prefix]struct{}, error) {
-	res, err := runner.Run(ctx, commands.wg, "showconf", iface)
+func currentAllowedIPPrefixes(ctx context.Context, runner execx.Runner, iface string, commands linuxcmd.CommandSet) (map[netip.Prefix]struct{}, error) {
+	res, err := runner.Run(ctx, commands.WG, "showconf", iface)
 	if err != nil {
 		return nil, err
 	}
-	return allowedIPPrefixesFromConfig(res.Stdout)
-}
-
-func allowedIPPrefixesFromConfig(conf string) (map[netip.Prefix]struct{}, error) {
-	cfg, err := clientwgquick.Parse([]byte(conf))
-	if err != nil {
-		return nil, err
-	}
-	out := map[netip.Prefix]struct{}{}
-	for _, p := range cfg.Peers {
-		for _, raw := range p.AllowedIPs {
-			raw = strings.TrimSpace(raw)
-			if raw == "" {
-				continue
-			}
-			pref, err := netip.ParsePrefix(raw)
-			if err != nil {
-				// Ignore unparseable entries (best-effort). Validate layer should generally prevent this.
-				continue
-			}
-			out[pref] = struct{}{}
-		}
-	}
-	return out, nil
+	return wgquick.AllowedIPPrefixSetFromText(res.Stdout)
 }
 
 func reconcileAllowedIPRoutes(ctx context.Context, b *Backend, iface string, oldAllowed, newAllowed map[netip.Prefix]struct{}) error {
 	// If we couldn't determine old state, only ensure new routes exist.
 	if oldAllowed == nil {
+		b.logger.Debug("wgquick reconcile allowedips routes", "iface", iface, "replace_count", len(newAllowed), "delete_count", 0)
 		for p := range newAllowed {
-			if err := routeReplace(ctx, b.runner, iface, p); err != nil {
+			if err := linuxcmd.RouteReplace(ctx, b.runner, iface, p, ""); err != nil {
 				return err
 			}
 		}
@@ -238,45 +236,19 @@ func reconcileAllowedIPRoutes(ctx context.Context, b *Backend, iface string, old
 	// Deterministic order helps tests/logs.
 	slices.SortFunc(toAdd, func(a, b netip.Prefix) int { return strings.Compare(a.String(), b.String()) })
 	slices.SortFunc(toDel, func(a, b netip.Prefix) int { return strings.Compare(a.String(), b.String()) })
+	b.logger.Debug("wgquick reconcile allowedips routes", "iface", iface, "replace_count", len(toAdd), "delete_count", len(toDel))
 
 	// Add first, then delete.
 	for _, p := range toAdd {
-		if err := routeReplace(ctx, b.runner, iface, p); err != nil {
+		if err := linuxcmd.RouteReplace(ctx, b.runner, iface, p, ""); err != nil {
 			return err
 		}
 	}
 	for _, p := range toDel {
-		if err := routeDelete(ctx, b.runner, iface, p); err != nil {
+		if err := linuxcmd.RouteDelete(ctx, b.runner, iface, p, ""); err != nil {
 			// Best-effort: deletions may race with external tools.
-			b.logf("ip route del failed iface=%q prefix=%q err=%v", iface, p.String(), err)
+			b.logger.Debug("ip route del failed", "iface", iface, "prefix", p.String(), "err", err)
 		}
 	}
 	return nil
-}
-
-func routeReplace(ctx context.Context, runner Runner, iface string, p netip.Prefix) error {
-	args := []string{"route", "replace", p.String(), "dev", iface}
-	if p.Addr().Is6() {
-		_, err := runner.Run(ctx, "ip", append([]string{"-6"}, args...)...)
-		return err
-	}
-	_, err := runner.Run(ctx, "ip", append([]string{"-4"}, args...)...)
-	return err
-}
-
-func routeDelete(ctx context.Context, runner Runner, iface string, p netip.Prefix) error {
-	args := []string{"route", "del", p.String(), "dev", iface}
-	if p.Addr().Is6() {
-		_, err := runner.Run(ctx, "ip", append([]string{"-6"}, args...)...)
-		return err
-	}
-	_, err := runner.Run(ctx, "ip", append([]string{"-4"}, args...)...)
-	return err
-}
-
-func (b *Backend) logf(format string, args ...any) {
-	if b.logger == nil {
-		return
-	}
-	b.logger.Printf(format, args...)
 }

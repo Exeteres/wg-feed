@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log"
 	"net/http"
 	"strings"
 	"time"
@@ -51,7 +52,11 @@ func FetchAndValidate(ctx context.Context, url string) (model.FeedDocument, []by
 	if err != nil {
 		return model.FeedDocument{}, nil, err
 	}
-	defer resp.Body.Close()
+	defer func() {
+		if cerr := resp.Body.Close(); cerr != nil {
+			log.Printf("close response body: %v", cerr)
+		}
+	}()
 
 	body, err := io.ReadAll(resp.Body)
 	if err != nil {
@@ -77,7 +82,7 @@ func FetchAndValidate(ctx context.Context, url string) (model.FeedDocument, []by
 		return model.FeedDocument{}, nil, err
 	}
 	if sr.Encrypted {
-		doc, err := DecryptFeedDocumentForSetupURL(url, sr.EncryptedData)
+		doc, err := DecryptFeedDocumentForURL(url, sr.EncryptedData)
 		if err != nil {
 			return model.FeedDocument{}, nil, err
 		}

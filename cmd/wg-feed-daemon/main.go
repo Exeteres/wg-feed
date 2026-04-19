@@ -2,31 +2,33 @@ package main
 
 import (
 	"context"
-	"log"
+	"flag"
 	"os"
 	"os/signal"
 	"syscall"
 
-	"github.com/joho/godotenv"
-
 	"github.com/exeteres/wg-feed/internal/client/config"
 	"github.com/exeteres/wg-feed/internal/daemon"
+	"github.com/exeteres/wg-feed/internal/logx"
 )
 
 func main() {
-	_ = godotenv.Load()
+	configPath := flag.String("config", "", "path to wg-feed config file (default: /etc/wg-feed/config.{yaml,yml,toml,json})")
+	flag.Parse()
 
-	logger := log.New(os.Stdout, "wg-feed-daemon ", log.LstdFlags|log.LUTC)
+	logger := logx.NewStdoutLogger()
 
-	cfg, err := config.FromEnv()
+	cfg, err := config.Load(*configPath)
 	if err != nil {
-		logger.Fatalf("config error: %v", err)
+		logger.Error("config error", "err", err)
+		os.Exit(1)
 	}
 
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer stop()
 
 	if err := daemon.Run(ctx, cfg, logger); err != nil {
-		logger.Fatalf("run error: %v", err)
+		logger.Error("run error", "err", err)
+		os.Exit(1)
 	}
 }

@@ -41,4 +41,17 @@ func TestFeedDocumentValidate(t *testing.T) {
 	if err := invalid.Validate(); err == nil {
 		t.Fatalf("expected error")
 	}
+
+	invalid = valid
+	invalid.Tunnels[0].Warning = "   "
+	if err := invalid.Validate(); err == nil {
+		t.Fatalf("expected error")
+	}
+
+	validWithTunnelWarning := valid
+	validWithTunnelWarning.Tunnels[0].Name = "Work"
+	validWithTunnelWarning.Tunnels[0].Warning = "Tunnel should not be used right now"
+	if err := validWithTunnelWarning.Validate(); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
 }

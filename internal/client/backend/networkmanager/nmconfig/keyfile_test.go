@@ -28,17 +28,15 @@ func TestSetGetAndBytes(t *testing.T) {
 	}
 }
 
-func TestRemoveSectionsWithPrefix(t *testing.T) {
-	f, err := Parse([]byte("[a]\nx=1\n[a-1]\ny=2\n[b]\nz=3\n"))
+func TestSetOverwritesKeyInSameSection(t *testing.T) {
+	f, err := Parse([]byte("[a]\nx=1\n"))
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	f.RemoveSectionsWithPrefix("a")
-	if f.HasSection("a") || f.HasSection("a-1") {
-		t.Fatalf("expected sections removed")
-	}
-	if !f.HasSection("b") {
-		t.Fatalf("expected section b to remain")
+	f.Set("a", "x", "2")
+	got, ok := f.Get("a", "x")
+	if !ok || got != "2" {
+		t.Fatalf("unexpected get after set overwrite: ok=%v got=%q", ok, got)
 	}
 }
 

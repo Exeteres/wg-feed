@@ -19,6 +19,7 @@ type Interface struct {
 	Addresses  []string
 	DNS        []string
 	MTU        *int
+	Extras     map[string]string
 }
 
 type Peer struct {
@@ -27,6 +28,15 @@ type Peer struct {
 	Endpoint            string
 	AllowedIPs          []string
 	PersistentKeepalive *int
+	Extras              map[string]string
+}
+
+func setExtra(m map[string]string, key, value string) map[string]string {
+	if m == nil {
+		m = make(map[string]string)
+	}
+	m[key] = value
+	return m
 }
 
 func Parse(data []byte) (Config, error) {
@@ -77,6 +87,8 @@ func Parse(data []byte) (Config, error) {
 					return Config{}, fmt.Errorf("invalid MTU %q", val)
 				}
 				cfg.Interface.MTU = &i
+			default:
+				cfg.Interface.Extras = setExtra(cfg.Interface.Extras, key, val)
 			}
 		case "peer":
 			if currentPeer == nil {
@@ -97,6 +109,8 @@ func Parse(data []byte) (Config, error) {
 					return Config{}, fmt.Errorf("invalid PersistentKeepalive %q", val)
 				}
 				currentPeer.PersistentKeepalive = &i
+			default:
+				currentPeer.Extras = setExtra(currentPeer.Extras, key, val)
 			}
 		}
 	}

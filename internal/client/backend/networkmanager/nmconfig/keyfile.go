@@ -42,11 +42,6 @@ func NewEmpty() *File {
 	return &File{f: ini.Empty(opt)}
 }
 
-func (f *File) HasSection(section string) bool {
-	_, err := f.f.GetSection(section)
-	return err == nil
-}
-
 func (f *File) Get(section, key string) (string, bool) {
 	sec, err := f.f.GetSection(section)
 	if err != nil {
@@ -65,18 +60,6 @@ func (f *File) Set(section, key, value string) {
 	}
 	sec := f.f.Section(section)
 	sec.Key(key).SetValue(value)
-}
-
-func (f *File) RemoveSectionsWithPrefix(prefix string) {
-	if prefix == "" {
-		return
-	}
-	for _, sec := range f.f.Sections() {
-		name := sec.Name()
-		if strings.HasPrefix(name, prefix) {
-			f.f.DeleteSection(name)
-		}
-	}
 }
 
 func (f *File) Bytes() []byte {

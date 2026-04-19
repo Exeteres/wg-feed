@@ -147,6 +147,9 @@ func (t Tunnel) Validate() error {
 	if !tunnelNameRe.MatchString(t.Name) {
 		return fmt.Errorf("name must match %s", tunnelNameRe.String())
 	}
+	if t.Warning != "" && strings.TrimSpace(t.Warning) == "" {
+		return fmt.Errorf("warning_message must be non-empty when present")
+	}
 	if strings.TrimSpace(t.DisplayInfo.Title) == "" {
 		return fmt.Errorf("display_info.title is required")
 	}

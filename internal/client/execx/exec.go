@@ -8,14 +8,18 @@ import (
 	"strings"
 )
 
-type Runner struct{}
+type Runner interface {
+	Run(ctx context.Context, name string, args ...string) (Result, error)
+}
+
+type ShellRunner struct{}
 
 type Result struct {
 	Stdout string
 	Stderr string
 }
 
-func (Runner) Run(ctx context.Context, name string, args ...string) (Result, error) {
+func (ShellRunner) Run(ctx context.Context, name string, args ...string) (Result, error) {
 	cmd := exec.CommandContext(ctx, name, args...)
 	var stdout, stderr bytes.Buffer
 	cmd.Stdout = &stdout

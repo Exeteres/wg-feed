@@ -51,8 +51,10 @@ type DisplayInfo struct {
 type Tunnel struct {
 	ID            string      `json:"id"`
 	Name          string      `json:"name"`
+	Warning       string      `json:"warning_message,omitempty"`
 	DisplayInfo   DisplayInfo `json:"display_info"`
 	Enabled       bool        `json:"enabled,omitempty"`
 	Forced        bool        `json:"forced,omitempty"`
+	Exclusive     bool        `json:"exclusive,omitempty"`
 	WGQuickConfig string      `json:"wg_quick_config"`
 }

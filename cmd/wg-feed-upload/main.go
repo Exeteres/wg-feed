@@ -66,7 +66,11 @@ func main() {
 	if err != nil {
 		logger.Fatalf("create etcd client: %v", err)
 	}
-	defer cli.Close()
+	defer func() {
+		if cerr := cli.Close(); cerr != nil {
+			logger.Printf("close etcd client: %v", cerr)
+		}
+	}()
 
 	st := etcd.NewStore(cli)
 	key := "wg-feed/feeds/" + feedPath

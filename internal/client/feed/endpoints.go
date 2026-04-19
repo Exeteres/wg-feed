@@ -23,8 +23,8 @@ func normalizeEndpoints(endpoints []string) []string {
 	return out
 }
 
-// FetchWithDecryptURL fetches requestURL but uses decryptURL (the Setup URL containing the age key
-// fragment) for decrypting encrypted_data when present.
+// FetchWithDecryptURL fetches requestURL but uses decryptURL (a configured endpoint URL containing
+// the age key fragment) for decrypting encrypted_data when present.
 func FetchWithDecryptURL(ctx context.Context, requestURL, decryptURL string, ifNoneMatchRevision string) (FetchResult, error) {
 	sr, body, notModified, err := fetchSuccessResponse(ctx, requestURL, ifNoneMatchRevision)
 	if err != nil {
@@ -41,7 +41,7 @@ func FetchWithDecryptURL(ctx context.Context, requestURL, decryptURL string, ifN
 	res.Body = body
 
 	if sr.Encrypted {
-		doc, err := DecryptFeedDocumentForSetupURL(decryptURL, sr.EncryptedData)
+		doc, err := DecryptFeedDocumentForURL(decryptURL, sr.EncryptedData)
 		if err != nil {
 			return FetchResult{}, err
 		}
