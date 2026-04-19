@@ -111,7 +111,8 @@ func InstallDaemonBinary(ctx context.Context, daemonPath string, releaseTag stri
 	if err != nil {
 		return err
 	}
-	asset := fmt.Sprintf("wg-feed-daemon_linux_%s", arch)
+	releaseVersion := strings.TrimPrefix(releaseTag, "v")
+	asset := fmt.Sprintf("wg-feed-daemon_%s_linux_%s", releaseVersion, arch)
 	url := fmt.Sprintf("https://github.com/exeteres/wg-feed/releases/download/%s/%s", releaseTag, asset)
 
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
