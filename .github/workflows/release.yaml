@@ -46,82 +46,143 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Compute release version
-        id: vars
-        run: |
-          echo "version=${GITHUB_REF_NAME#v}" >> "$GITHUB_OUTPUT"
-
-      - name: Verify GoReleaser binaries for image packaging
+      - name: Resolve paths for GoReleaser artifacts and SBOMs
         run: |
           set -euo pipefail
-          for name in server upload daemon apply; do
+          test -f dist/artifacts.json || { echo "missing dist/artifacts.json" >&2; exit 1; }
+          mkdir -p dist/static
+
+          lookup_archive() {
+            id="$1"
+            arch="$2"
+
+            jq -r --arg id "$id" --arg arch "$arch" '
+              [ .[]
+              | select(.type == "Binary")
+              | select(.extra.ID == "binaries")
+              | select(.extra.Binary == $id or .extra.Binary == ($id + ".exe"))
+              | select(.goos == "linux")
+              | select(.goarch == $arch)
+              | .path
+              ][0] // empty
+            ' dist/artifacts.json
+          }
+
+          resolve_static_artifacts() {
+            id="$1"
+            arch="$2"
+
+            archive_src="$(lookup_archive "$id" "$arch")"
+
+            test -n "$archive_src" || { echo "packaged artifact not found in artifacts.json for id=$id arch=$arch" >&2; exit 1; }
+            test -f "$archive_src" || { echo "packaged artifact path from artifacts.json not found: $archive_src" >&2; exit 1; }
+
+            sbom_src="$(jq -r --arg id "$id" --arg arch "$arch" '
+              [ .[]
+              | select(.type == "SBOM")
+              | select((.extra.ID // "") == "archives")
+              | select(.path | startswith("dist/" + $id + "_"))
+              | select(.path | endswith("_linux_" + $arch + ".sbom.json"))
+              | .path
+              ][0] // empty
+            ' dist/artifacts.json)"
+
+            test -n "$sbom_src" || { echo "sbom not found in artifacts.json for id=$id arch=$arch" >&2; exit 1; }
+            test -f "$sbom_src" || { echo "sbom path from artifacts.json not found: $sbom_src" >&2; exit 1; }
+
+            dest_base="dist/static/${id}_linux_${arch}"
+            archive_dest="$dest_base"
+            sbom_dest="${dest_base}.sbom.json"
+            install -m 0644 "$archive_src" "$archive_dest"
+            install -m 0644 "$sbom_src" "$sbom_dest"
+            chmod 0755 "$archive_dest"
+          }
+
+          for id in wg-feed-server wg-feed-upload wg-feed-daemon wg-feed-apply wg-feed-installer; do
             for arch in amd64 arm64; do
-              path="dist/wg-feed-${name}_linux_${arch}"
-              test -f "$path" || { echo "missing expected binary: $path" >&2; exit 1; }
-              test -f "${path}.sbom.json" || { echo "missing expected binary sbom: ${path}.sbom.json" >&2; exit 1; }
+              resolve_static_artifacts "$id" "$arch"
             done
           done
+
+          archive_count="$(jq '[ .[] | select(.type == "Binary") | select(.extra.ID == "binaries") ] | length' dist/artifacts.json)"
+          sbom_count="$(jq '[ .[] | select(.type == "SBOM") | select((.extra.ID // "") == "archives") ] | length' dist/artifacts.json)"
+          test "$archive_count" -gt 0 || { echo "no packaged release artifacts in dist/artifacts.json" >&2; exit 1; }
+          test "$sbom_count" -gt 0 || { echo "no release sbom artifacts in dist/artifacts.json" >&2; exit 1; }
 
       - name: Attest Linux binaries provenance
         uses: actions/attest@v4
         with:
           subject-path: |
-            dist/wg-feed-server_linux_amd64
-            dist/wg-feed-server_linux_arm64
-            dist/wg-feed-upload_linux_amd64
-            dist/wg-feed-upload_linux_arm64
-            dist/wg-feed-daemon_linux_amd64
-            dist/wg-feed-daemon_linux_arm64
-            dist/wg-feed-apply_linux_amd64
-            dist/wg-feed-apply_linux_arm64
+            dist/static/wg-feed-server_linux_amd64
+            dist/static/wg-feed-server_linux_arm64
+            dist/static/wg-feed-upload_linux_amd64
+            dist/static/wg-feed-upload_linux_arm64
+            dist/static/wg-feed-daemon_linux_amd64
+            dist/static/wg-feed-daemon_linux_arm64
+            dist/static/wg-feed-apply_linux_amd64
+            dist/static/wg-feed-apply_linux_arm64
+            dist/static/wg-feed-installer_linux_amd64
+            dist/static/wg-feed-installer_linux_arm64
 
-      - name: Attest wg-feed-server linux amd64 binary SBOM
+      - name: Attest wg-feed-server linux amd64 archive SBOM
         uses: actions/attest@v4
         with:
-          subject-path: dist/wg-feed-server_linux_amd64
-          sbom-path: dist/wg-feed-server_linux_amd64.sbom.json
+          subject-path: dist/static/wg-feed-server_linux_amd64
+          sbom-path: dist/static/wg-feed-server_linux_amd64.sbom.json
 
-      - name: Attest wg-feed-server linux arm64 binary SBOM
+      - name: Attest wg-feed-server linux arm64 archive SBOM
         uses: actions/attest@v4
         with:
-          subject-path: dist/wg-feed-server_linux_arm64
-          sbom-path: dist/wg-feed-server_linux_arm64.sbom.json
+          subject-path: dist/static/wg-feed-server_linux_arm64
+          sbom-path: dist/static/wg-feed-server_linux_arm64.sbom.json
 
-      - name: Attest wg-feed-upload linux amd64 binary SBOM
+      - name: Attest wg-feed-upload linux amd64 archive SBOM
         uses: actions/attest@v4
         with:
-          subject-path: dist/wg-feed-upload_linux_amd64
-          sbom-path: dist/wg-feed-upload_linux_amd64.sbom.json
+          subject-path: dist/static/wg-feed-upload_linux_amd64
+          sbom-path: dist/static/wg-feed-upload_linux_amd64.sbom.json
 
-      - name: Attest wg-feed-upload linux arm64 binary SBOM
+      - name: Attest wg-feed-upload linux arm64 archive SBOM
         uses: actions/attest@v4
         with:
-          subject-path: dist/wg-feed-upload_linux_arm64
-          sbom-path: dist/wg-feed-upload_linux_arm64.sbom.json
+          subject-path: dist/static/wg-feed-upload_linux_arm64
+          sbom-path: dist/static/wg-feed-upload_linux_arm64.sbom.json
 
-      - name: Attest wg-feed-daemon linux amd64 binary SBOM
+      - name: Attest wg-feed-daemon linux amd64 archive SBOM
         uses: actions/attest@v4
         with:
-          subject-path: dist/wg-feed-daemon_linux_amd64
-          sbom-path: dist/wg-feed-daemon_linux_amd64.sbom.json
+          subject-path: dist/static/wg-feed-daemon_linux_amd64
+          sbom-path: dist/static/wg-feed-daemon_linux_amd64.sbom.json
 
-      - name: Attest wg-feed-daemon linux arm64 binary SBOM
+      - name: Attest wg-feed-daemon linux arm64 archive SBOM
         uses: actions/attest@v4
         with:
-          subject-path: dist/wg-feed-daemon_linux_arm64
-          sbom-path: dist/wg-feed-daemon_linux_arm64.sbom.json
+          subject-path: dist/static/wg-feed-daemon_linux_arm64
+          sbom-path: dist/static/wg-feed-daemon_linux_arm64.sbom.json
 
-      - name: Attest wg-feed-apply linux amd64 binary SBOM
+      - name: Attest wg-feed-apply linux amd64 archive SBOM
         uses: actions/attest@v4
         with:
-          subject-path: dist/wg-feed-apply_linux_amd64
-          sbom-path: dist/wg-feed-apply_linux_amd64.sbom.json
+          subject-path: dist/static/wg-feed-apply_linux_amd64
+          sbom-path: dist/static/wg-feed-apply_linux_amd64.sbom.json
 
-      - name: Attest wg-feed-apply linux arm64 binary SBOM
+      - name: Attest wg-feed-apply linux arm64 archive SBOM
         uses: actions/attest@v4
         with:
-          subject-path: dist/wg-feed-apply_linux_arm64
-          sbom-path: dist/wg-feed-apply_linux_arm64.sbom.json
+          subject-path: dist/static/wg-feed-apply_linux_arm64
+          sbom-path: dist/static/wg-feed-apply_linux_arm64.sbom.json
+
+      - name: Attest wg-feed-installer linux amd64 archive SBOM
+        uses: actions/attest@v4
+        with:
+          subject-path: dist/static/wg-feed-installer_linux_amd64
+          sbom-path: dist/static/wg-feed-installer_linux_amd64.sbom.json
+
+      - name: Attest wg-feed-installer linux arm64 archive SBOM
+        uses: actions/attest@v4
+        with:
+          subject-path: dist/static/wg-feed-installer_linux_arm64
+          sbom-path: dist/static/wg-feed-installer_linux_arm64.sbom.json
 
       - name: Login to GitHub Container Registry
         uses: docker/login-action@v3
@@ -150,7 +211,7 @@ jobs:
           cache-from: type=gha
           cache-to: type=gha,mode=max
           build-args: |
-            BINARY_PREFIX=dist/wg-feed-server_linux
+            BINARY_PREFIX=dist/static/wg-feed-server_linux
 
       - name: Sign wg-feed-server image
         run: |
@@ -191,7 +252,7 @@ jobs:
           cache-from: type=gha
           cache-to: type=gha,mode=max
           build-args: |
-            BINARY_PREFIX=dist/wg-feed-upload_linux
+            BINARY_PREFIX=dist/static/wg-feed-upload_linux
 
       - name: Sign wg-feed-upload image
         run: |
@@ -232,7 +293,7 @@ jobs:
           cache-from: type=gha
           cache-to: type=gha,mode=max
           build-args: |
-            BINARY_PREFIX=dist/wg-feed-daemon_linux
+            BINARY_PREFIX=dist/static/wg-feed-daemon_linux
 
       - name: Sign wg-feed-daemon image
         run: |
@@ -273,7 +334,7 @@ jobs:
           cache-from: type=gha
           cache-to: type=gha,mode=max
           build-args: |
-            BINARY_PREFIX=dist/wg-feed-apply_linux
+            BINARY_PREFIX=dist/static/wg-feed-apply_linux
 
       - name: Sign wg-feed-apply image
         run: |

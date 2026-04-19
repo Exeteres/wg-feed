@@ -5,8 +5,7 @@ project_name: wg-feed
 builds:
   - id: wg-feed-server
     main: ./cmd/wg-feed-server
-    binary: wg-feed-server_{{ .Os }}_{{ .Arch }}
-    no_unique_dist_dir: true
+    binary: wg-feed-server
     env:
       - CGO_ENABLED=0
     goos:
@@ -17,8 +16,7 @@ builds:
 
   - id: wg-feed-upload
     main: ./cmd/wg-feed-upload
-    binary: wg-feed-upload_{{ .Os }}_{{ .Arch }}
-    no_unique_dist_dir: true
+    binary: wg-feed-upload
     env:
       - CGO_ENABLED=0
     goos:
@@ -31,8 +29,7 @@ builds:
 
   - id: wg-feed-daemon
     main: ./cmd/wg-feed-daemon
-    binary: wg-feed-daemon_{{ .Os }}_{{ .Arch }}
-    no_unique_dist_dir: true
+    binary: wg-feed-daemon
     env:
       - CGO_ENABLED=0
     goos:
@@ -45,8 +42,7 @@ builds:
 
   - id: wg-feed-apply
     main: ./cmd/wg-feed-apply
-    binary: wg-feed-apply_{{ .Os }}_{{ .Arch }}
-    no_unique_dist_dir: true
+    binary: wg-feed-apply
     env:
       - CGO_ENABLED=0
     goos:
@@ -59,8 +55,7 @@ builds:
 
   - id: wg-feed-installer
     main: ./cmd/wg-feed-installer
-    binary: wg-feed-installer_{{ .Os }}_{{ .Arch }}
-    no_unique_dist_dir: true
+    binary: wg-feed-installer
     env:
       - CGO_ENABLED=0
     goos:
@@ -83,10 +78,8 @@ checksum:
   name_template: checksums.txt
 
 sboms:
-  - id: binaries
+  - id: archives
     artifacts: binary
-    documents:
-      - "${artifact}.sbom.json"
     disable: false
 
 signs:

@@ -58,7 +58,7 @@ for both provenance and SBOM.
 To verify release checksums and attestations, use the following commands:
 
 ```bash
-TAG=v0.5.2
+TAG=v0.5.4
 BASE=https://github.com/exeteres/wg-feed/releases/download/${TAG}
 BIN=wg-feed-daemon_${TAG}_linux_amd64
 
@@ -96,7 +96,7 @@ Container images are signed with cosign keyless signatures, and provenance + SBO
 To verify image signature and attestations, use the following commands:
 
 ```bash
-TAG=v0.5.2
+TAG=v0.5.4
 IMAGE=ghcr.io/exeteres/wg-feed/server:${TAG}
 
 # Verify image signature
