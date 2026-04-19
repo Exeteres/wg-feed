@@ -104,11 +104,12 @@ verify_checksum() {
 main() {
   preflight
 
-  local arch tag installer_asset daemon_asset installer_url checksums_url checksums_text installer_checksum daemon_checksum tmpdir installer_bin need_download actual_checksum
+  local arch tag tag_version installer_asset daemon_asset installer_url checksums_url checksums_text installer_checksum daemon_checksum tmpdir installer_bin need_download actual_checksum
   arch="$(detect_arch)"
   tag="$(latest_tag)"
-  installer_asset="wg-feed-installer_linux_${arch}"
-  daemon_asset="wg-feed-daemon_linux_${arch}"
+  tag_version="${tag#v}"
+  installer_asset="wg-feed-installer_${tag_version}_linux_${arch}"
+  daemon_asset="wg-feed-daemon_${tag_version}_linux_${arch}"
   installer_url="https://github.com/${REPO_OWNER}/${REPO_NAME}/releases/download/${tag}/${installer_asset}"
   checksums_url="https://github.com/${REPO_OWNER}/${REPO_NAME}/releases/download/${tag}/checksums.txt"
 
@@ -140,9 +141,9 @@ main() {
   fi
 
   if [[ "${EUID}" -ne 0 ]]; then
-    exec sudo WG_FEED_VERSION="$tag" WG_FEED_DAEMON_CHECKSUM="$daemon_checksum" "$installer_bin" "$@"
+    exec sudo env WG_FEED_VERSION="$tag" WG_FEED_DAEMON_CHECKSUM="$daemon_checksum" "$installer_bin" "$@"
   fi
-  exec WG_FEED_VERSION="$tag" WG_FEED_DAEMON_CHECKSUM="$daemon_checksum" "$installer_bin" "$@"
+  exec env WG_FEED_VERSION="$tag" WG_FEED_DAEMON_CHECKSUM="$daemon_checksum" "$installer_bin" "$@"
 }
 
 main "$@"
