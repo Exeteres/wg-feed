@@ -58,10 +58,11 @@ for both provenance and SBOM.
 To verify release checksums and attestations, use the following commands:
 
 ```bash
-TAG=v0.5.4
-BASE=https://github.com/exeteres/wg-feed/releases/download/${TAG}
-BIN=wg-feed-daemon_${TAG}_linux_amd64
+VERSION=0.5.4
+BASE=https://github.com/exeteres/wg-feed/releases/download/v${VERSION}
+BIN=wg-feed-daemon_${VERSION}_linux_amd64
 
+# Download checksums and their signature + certificate for verification
 curl -fsSLO ${BASE}/checksums.txt
 curl -fsSLO ${BASE}/checksums.txt.sig
 curl -fsSLO ${BASE}/checksums.txt.pem
@@ -74,19 +75,21 @@ cosign verify-blob \
 	--certificate-oidc-issuer https://token.actions.githubusercontent.com \
 	checksums.txt
 
-# Verify binary provenance attestation
+# Download the binary for attestation verification
 curl -fsSLO ${BASE}/${BIN}
+
+# Verify binary provenance attestation
 gh attestation verify ${BIN} \
 	--repo Exeteres/wg-feed \
 	--signer-workflow Exeteres/wg-feed/.github/workflows/release.yaml \
-	--source-ref refs/tags/${TAG}
+	--source-ref refs/tags/v${VERSION}
 
 # Verify binary SBOM attestation
 gh attestation verify ${BIN} \
 	--repo Exeteres/wg-feed \
 	--signer-workflow Exeteres/wg-feed/.github/workflows/release.yaml \
-	--source-ref refs/tags/${TAG} \
-	--predicate-type https://spdx.dev/Document
+	--source-ref refs/tags/v${VERSION} \
+	--predicate-type https://spdx.dev/Document/v2.3
 ```
 
 ### Images
@@ -96,8 +99,8 @@ Container images are signed with cosign keyless signatures, and provenance + SBO
 To verify image signature and attestations, use the following commands:
 
 ```bash
-TAG=v0.5.4
-IMAGE=ghcr.io/exeteres/wg-feed/server:${TAG}
+VERSION=0.5.4
+IMAGE=ghcr.io/exeteres/wg-feed/server:v${VERSION}
 
 # Verify image signature
 cosign verify \
@@ -109,15 +112,15 @@ cosign verify \
 gh attestation verify oci://${IMAGE} \
 	--repo Exeteres/wg-feed \
 	--signer-workflow Exeteres/wg-feed/.github/workflows/release.yaml \
-	--source-ref refs/tags/${TAG} \
+	--source-ref refs/tags/v${VERSION} \
 	--bundle-from-oci
 
 # Verify image SBOM attestation
 gh attestation verify oci://${IMAGE} \
 	--repo Exeteres/wg-feed \
 	--signer-workflow Exeteres/wg-feed/.github/workflows/release.yaml \
-	--source-ref refs/tags/${TAG} \
-	--predicate-type https://spdx.dev/Document \
+	--source-ref refs/tags/v${VERSION} \
+	--predicate-type https://spdx.dev/Document/v2.3 \
 	--bundle-from-oci
 ```
 
