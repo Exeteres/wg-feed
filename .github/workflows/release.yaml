@@ -16,6 +16,7 @@ jobs:
       contents: write
       packages: write
       id-token: write
+      attestations: write
 
     steps:
       - name: Checkout
@@ -32,14 +33,96 @@ jobs:
       - name: Install cosign
         uses: sigstore/cosign-installer@v3
 
+      - name: Install syft
+        run: |
+          curl -sSfL https://raw.githubusercontent.com/anchore/syft/main/install.sh | sh -s -- -b /usr/local/bin
+
       - name: Run GoReleaser
         uses: goreleaser/goreleaser-action@v6
         with:
           distribution: goreleaser
           version: "~> v2"
-          args: release --clean
+          args: release --clean --draft
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Compute release version
+        id: vars
+        run: |
+          echo "version=${GITHUB_REF_NAME#v}" >> "$GITHUB_OUTPUT"
+
+      - name: Verify GoReleaser binaries for image packaging
+        run: |
+          set -euo pipefail
+          version="${{ steps.vars.outputs.version }}"
+          for name in server upload daemon apply; do
+            for arch in amd64 arm64; do
+              path="dist/wg-feed-${name}_${version}_linux_${arch}"
+              test -f "$path" || { echo "missing expected binary: $path" >&2; exit 1; }
+              test -f "${path}.sbom.json" || { echo "missing expected binary sbom: ${path}.sbom.json" >&2; exit 1; }
+            done
+          done
+
+      - name: Attest Linux binaries provenance
+        uses: actions/attest@v4
+        with:
+          subject-path: |
+            dist/wg-feed-server_${{ steps.vars.outputs.version }}_linux_amd64
+            dist/wg-feed-server_${{ steps.vars.outputs.version }}_linux_arm64
+            dist/wg-feed-upload_${{ steps.vars.outputs.version }}_linux_amd64
+            dist/wg-feed-upload_${{ steps.vars.outputs.version }}_linux_arm64
+            dist/wg-feed-daemon_${{ steps.vars.outputs.version }}_linux_amd64
+            dist/wg-feed-daemon_${{ steps.vars.outputs.version }}_linux_arm64
+            dist/wg-feed-apply_${{ steps.vars.outputs.version }}_linux_amd64
+            dist/wg-feed-apply_${{ steps.vars.outputs.version }}_linux_arm64
+
+      - name: Attest wg-feed-server linux amd64 binary SBOM
+        uses: actions/attest@v4
+        with:
+          subject-path: dist/wg-feed-server_${{ steps.vars.outputs.version }}_linux_amd64
+          sbom-path: dist/wg-feed-server_${{ steps.vars.outputs.version }}_linux_amd64.sbom.json
+
+      - name: Attest wg-feed-server linux arm64 binary SBOM
+        uses: actions/attest@v4
+        with:
+          subject-path: dist/wg-feed-server_${{ steps.vars.outputs.version }}_linux_arm64
+          sbom-path: dist/wg-feed-server_${{ steps.vars.outputs.version }}_linux_arm64.sbom.json
+
+      - name: Attest wg-feed-upload linux amd64 binary SBOM
+        uses: actions/attest@v4
+        with:
+          subject-path: dist/wg-feed-upload_${{ steps.vars.outputs.version }}_linux_amd64
+          sbom-path: dist/wg-feed-upload_${{ steps.vars.outputs.version }}_linux_amd64.sbom.json
+
+      - name: Attest wg-feed-upload linux arm64 binary SBOM
+        uses: actions/attest@v4
+        with:
+          subject-path: dist/wg-feed-upload_${{ steps.vars.outputs.version }}_linux_arm64
+          sbom-path: dist/wg-feed-upload_${{ steps.vars.outputs.version }}_linux_arm64.sbom.json
+
+      - name: Attest wg-feed-daemon linux amd64 binary SBOM
+        uses: actions/attest@v4
+        with:
+          subject-path: dist/wg-feed-daemon_${{ steps.vars.outputs.version }}_linux_amd64
+          sbom-path: dist/wg-feed-daemon_${{ steps.vars.outputs.version }}_linux_amd64.sbom.json
+
+      - name: Attest wg-feed-daemon linux arm64 binary SBOM
+        uses: actions/attest@v4
+        with:
+          subject-path: dist/wg-feed-daemon_${{ steps.vars.outputs.version }}_linux_arm64
+          sbom-path: dist/wg-feed-daemon_${{ steps.vars.outputs.version }}_linux_arm64.sbom.json
+
+      - name: Attest wg-feed-apply linux amd64 binary SBOM
+        uses: actions/attest@v4
+        with:
+          subject-path: dist/wg-feed-apply_${{ steps.vars.outputs.version }}_linux_amd64
+          sbom-path: dist/wg-feed-apply_${{ steps.vars.outputs.version }}_linux_amd64.sbom.json
+
+      - name: Attest wg-feed-apply linux arm64 binary SBOM
+        uses: actions/attest@v4
+        with:
+          subject-path: dist/wg-feed-apply_${{ steps.vars.outputs.version }}_linux_arm64
+          sbom-path: dist/wg-feed-apply_${{ steps.vars.outputs.version }}_linux_arm64.sbom.json
 
       - name: Login to GitHub Container Registry
         uses: docker/login-action@v3
@@ -67,14 +150,33 @@ jobs:
           platforms: linux/amd64,linux/arm64
           cache-from: type=gha
           cache-to: type=gha,mode=max
-          provenance: mode=max
-          sbom: true
           build-args: |
-            CMD=wg-feed-server
+            BINARY_PREFIX=dist/wg-feed-server_${{ steps.vars.outputs.version }}_linux
 
       - name: Sign wg-feed-server image
         run: |
           cosign sign --yes "${IMAGE_PREFIX}/server@${{ steps.build_server.outputs.digest }}"
+
+      - name: Attest wg-feed-server image provenance
+        uses: actions/attest@v4
+        with:
+          subject-name: ${{ env.IMAGE_PREFIX }}/server
+          subject-digest: ${{ steps.build_server.outputs.digest }}
+          push-to-registry: true
+          create-storage-record: false
+
+      - name: Generate wg-feed-server image SBOM
+        run: |
+          syft "${IMAGE_PREFIX}/server@${{ steps.build_server.outputs.digest }}" -o spdx-json=server-image.sbom.spdx.json
+
+      - name: Attest wg-feed-server image SBOM
+        uses: actions/attest@v4
+        with:
+          subject-name: ${{ env.IMAGE_PREFIX }}/server
+          subject-digest: ${{ steps.build_server.outputs.digest }}
+          sbom-path: server-image.sbom.spdx.json
+          push-to-registry: true
+          create-storage-record: false
 
       - name: Build and push wg-feed-upload
         id: build_upload
@@ -89,14 +191,33 @@ jobs:
           platforms: linux/amd64,linux/arm64
           cache-from: type=gha
           cache-to: type=gha,mode=max
-          provenance: mode=max
-          sbom: true
           build-args: |
-            CMD=wg-feed-upload
+            BINARY_PREFIX=dist/wg-feed-upload_${{ steps.vars.outputs.version }}_linux
 
       - name: Sign wg-feed-upload image
         run: |
           cosign sign --yes "${IMAGE_PREFIX}/upload@${{ steps.build_upload.outputs.digest }}"
+
+      - name: Attest wg-feed-upload image provenance
+        uses: actions/attest@v4
+        with:
+          subject-name: ${{ env.IMAGE_PREFIX }}/upload
+          subject-digest: ${{ steps.build_upload.outputs.digest }}
+          push-to-registry: true
+          create-storage-record: false
+
+      - name: Generate wg-feed-upload image SBOM
+        run: |
+          syft "${IMAGE_PREFIX}/upload@${{ steps.build_upload.outputs.digest }}" -o spdx-json=upload-image.sbom.spdx.json
+
+      - name: Attest wg-feed-upload image SBOM
+        uses: actions/attest@v4
+        with:
+          subject-name: ${{ env.IMAGE_PREFIX }}/upload
+          subject-digest: ${{ steps.build_upload.outputs.digest }}
+          sbom-path: upload-image.sbom.spdx.json
+          push-to-registry: true
+          create-storage-record: false
 
       - name: Build and push wg-feed-daemon
         id: build_daemon
@@ -111,14 +232,33 @@ jobs:
           platforms: linux/amd64,linux/arm64
           cache-from: type=gha
           cache-to: type=gha,mode=max
-          provenance: mode=max
-          sbom: true
           build-args: |
-            CMD=wg-feed-daemon
+            BINARY_PREFIX=dist/wg-feed-daemon_${{ steps.vars.outputs.version }}_linux
 
       - name: Sign wg-feed-daemon image
         run: |
           cosign sign --yes "${IMAGE_PREFIX}/daemon@${{ steps.build_daemon.outputs.digest }}"
+
+      - name: Attest wg-feed-daemon image provenance
+        uses: actions/attest@v4
+        with:
+          subject-name: ${{ env.IMAGE_PREFIX }}/daemon
+          subject-digest: ${{ steps.build_daemon.outputs.digest }}
+          push-to-registry: true
+          create-storage-record: false
+
+      - name: Generate wg-feed-daemon image SBOM
+        run: |
+          syft "${IMAGE_PREFIX}/daemon@${{ steps.build_daemon.outputs.digest }}" -o spdx-json=daemon-image.sbom.spdx.json
+
+      - name: Attest wg-feed-daemon image SBOM
+        uses: actions/attest@v4
+        with:
+          subject-name: ${{ env.IMAGE_PREFIX }}/daemon
+          subject-digest: ${{ steps.build_daemon.outputs.digest }}
+          sbom-path: daemon-image.sbom.spdx.json
+          push-to-registry: true
+          create-storage-record: false
 
       - name: Build and push wg-feed-apply
         id: build_apply
@@ -133,11 +273,36 @@ jobs:
           platforms: linux/amd64,linux/arm64
           cache-from: type=gha
           cache-to: type=gha,mode=max
-          provenance: mode=max
-          sbom: true
           build-args: |
-            CMD=wg-feed-apply
+            BINARY_PREFIX=dist/wg-feed-apply_${{ steps.vars.outputs.version }}_linux
 
       - name: Sign wg-feed-apply image
         run: |
           cosign sign --yes "${IMAGE_PREFIX}/apply@${{ steps.build_apply.outputs.digest }}"
+
+      - name: Attest wg-feed-apply image provenance
+        uses: actions/attest@v4
+        with:
+          subject-name: ${{ env.IMAGE_PREFIX }}/apply
+          subject-digest: ${{ steps.build_apply.outputs.digest }}
+          push-to-registry: true
+          create-storage-record: false
+
+      - name: Generate wg-feed-apply image SBOM
+        run: |
+          syft "${IMAGE_PREFIX}/apply@${{ steps.build_apply.outputs.digest }}" -o spdx-json=apply-image.sbom.spdx.json
+
+      - name: Attest wg-feed-apply image SBOM
+        uses: actions/attest@v4
+        with:
+          subject-name: ${{ env.IMAGE_PREFIX }}/apply
+          subject-digest: ${{ steps.build_apply.outputs.digest }}
+          sbom-path: apply-image.sbom.spdx.json
+          push-to-registry: true
+          create-storage-record: false
+
+      - name: Publish GitHub release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          gh release edit "${{ github.ref_name }}" --draft=false

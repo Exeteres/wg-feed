@@ -77,6 +77,16 @@ archives:
 checksum:
   name_template: checksums.txt
 
+sboms:
+  - id: binaries
+    artifacts: binary
+    ids:
+      - wg-feed-server
+      - wg-feed-upload
+      - wg-feed-daemon
+      - wg-feed-apply
+      - wg-feed-installer
+
 signs:
   - cmd: cosign
     artifacts: checksum

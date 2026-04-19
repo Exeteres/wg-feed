@@ -319,3 +319,25 @@ func TestApply_Enabled_EmptyDNSRemovesNamespaceResolvConf(t *testing.T) {
 		t.Fatalf("expected resolv.conf to be removed, err=%v", err)
 	}
 }
+
+func TestApply_Enabled_TreatsDeviceDoesNotExistAsMissing(t *testing.T) {
+	r := &fakeRunner{
+		errFn: func(call string) error {
+			if call == "ip -o link show dev amsterdam" {
+				return errors.New("exec ip -o link show dev amsterdam: exit status 1 (stderr=Device \"amsterdam\" does not exist.)")
+			}
+			return nil
+		},
+	}
+	b := New(r, testLogger())
+
+	_, err := b.Apply(context.Background(), testTunnel("amsterdam", "[Interface]\nPrivateKey = x\nAddress = 10.20.0.2/32\n\n[Peer]\nPublicKey = y\nAllowedIPs = 0.0.0.0/0\n"), state.TunnelState{})
+	if err != nil {
+		t.Fatalf("Apply error: %v", err)
+	}
+
+	joined := strings.Join(r.calls, "\n")
+	if !strings.Contains(joined, "ip link add dev amsterdam type wireguard") {
+		t.Fatalf("expected interface creation when init namespace reports missing device; got:\n%s", joined)
+	}
+}

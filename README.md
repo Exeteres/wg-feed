@@ -52,44 +52,73 @@ See [nixos/README.md](nixos/README.md).
 ### Binaries
 
 Release checksums are signed with Sigstore cosign during the release workflow.
+In addition, GitHub artifact attestations are published for Linux release binaries
+for both provenance and SBOM.
 
-To verify release checksums for a tag:
+To verify release checksums and attestations, use the following commands:
 
 ```bash
-TAG=v0.5.1
+TAG=v0.5.2
 BASE=https://github.com/exeteres/wg-feed/releases/download/${TAG}
+BIN=wg-feed-daemon_${TAG}_linux_amd64
 
 curl -fsSLO ${BASE}/checksums.txt
 curl -fsSLO ${BASE}/checksums.txt.sig
 curl -fsSLO ${BASE}/checksums.txt.pem
 
+# Verify checksum signature and certificate
 cosign verify-blob \
 	--certificate checksums.txt.pem \
 	--signature checksums.txt.sig \
-	--certificate-identity-regexp 'https://github.com/exeteres/wg-feed/.github/workflows/release.yaml@refs/tags/v.*' \
+	--certificate-identity-regexp '(?i)https://github.com/exeteres/wg-feed/.github/workflows/release.yaml@refs/tags/v.*' \
 	--certificate-oidc-issuer https://token.actions.githubusercontent.com \
 	checksums.txt
+
+# Verify binary provenance attestation
+curl -fsSLO ${BASE}/${BIN}
+gh attestation verify ${BIN} \
+	--repo Exeteres/wg-feed \
+	--signer-workflow Exeteres/wg-feed/.github/workflows/release.yaml \
+	--source-ref refs/tags/${TAG}
+
+# Verify binary SBOM attestation
+gh attestation verify ${BIN} \
+	--repo Exeteres/wg-feed \
+	--signer-workflow Exeteres/wg-feed/.github/workflows/release.yaml \
+	--source-ref refs/tags/${TAG} \
+	--predicate-type https://spdx.dev/Document
 ```
 
 ### Images
 
-Container images are pushed with BuildKit provenance and SBOM attestations, and each image digest is signed with cosign keyless signatures.
+Container images are signed with cosign keyless signatures, and provenance + SBOM attestations are published with GitHub `actions/attest`.
 
-To verify an image signature and provenance attestation:
+To verify image signature and attestations, use the following commands:
 
 ```bash
-IMAGE=ghcr.io/exeteres/wg-feed/server:v0.5.1
+TAG=v0.5.2
+IMAGE=ghcr.io/exeteres/wg-feed/server:${TAG}
 
+# Verify image signature
 cosign verify \
-	--certificate-identity-regexp 'https://github.com/exeteres/wg-feed/.github/workflows/release.yaml@refs/tags/v.*' \
+	--certificate-identity-regexp '(?i)https://github.com/exeteres/wg-feed/.github/workflows/release.yaml@refs/tags/v.*' \
 	--certificate-oidc-issuer https://token.actions.githubusercontent.com \
 	${IMAGE}
 
-cosign verify-attestation \
-	--type slsaprovenance \
-	--certificate-identity-regexp 'https://github.com/exeteres/wg-feed/.github/workflows/release.yaml@refs/tags/v.*' \
-	--certificate-oidc-issuer https://token.actions.githubusercontent.com \
-	${IMAGE}
+# Verify image provenance attestation
+gh attestation verify oci://${IMAGE} \
+	--repo Exeteres/wg-feed \
+	--signer-workflow Exeteres/wg-feed/.github/workflows/release.yaml \
+	--source-ref refs/tags/${TAG} \
+	--bundle-from-oci
+
+# Verify image SBOM attestation
+gh attestation verify oci://${IMAGE} \
+	--repo Exeteres/wg-feed \
+	--signer-workflow Exeteres/wg-feed/.github/workflows/release.yaml \
+	--source-ref refs/tags/${TAG} \
+	--predicate-type https://spdx.dev/Document \
+	--bundle-from-oci
 ```
 
 ## Contributing

@@ -407,6 +407,7 @@ func isMissingResourceError(err error) bool {
 	s := strings.ToLower(err.Error())
 	return strings.Contains(s, "no such file or directory") ||
 		strings.Contains(s, "not found") ||
+		strings.Contains(s, "does not exist") ||
 		strings.Contains(s, "cannot find device") ||
 		strings.Contains(s, "cannot open network namespace") ||
 		strings.Contains(s, "cannot remove namespace file")
