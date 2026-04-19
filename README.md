@@ -47,6 +47,51 @@ This repo provides a flake that builds all four binaries, exports a NetworkManag
 
 See [nixos/README.md](nixos/README.md).
 
+## Artifact Verification
+
+### Binaries
+
+Release checksums are signed with Sigstore cosign during the release workflow.
+
+To verify release checksums for a tag:
+
+```bash
+TAG=v0.5.1
+BASE=https://github.com/exeteres/wg-feed/releases/download/${TAG}
+
+curl -fsSLO ${BASE}/checksums.txt
+curl -fsSLO ${BASE}/checksums.txt.sig
+curl -fsSLO ${BASE}/checksums.txt.pem
+
+cosign verify-blob \
+	--certificate checksums.txt.pem \
+	--signature checksums.txt.sig \
+	--certificate-identity-regexp 'https://github.com/exeteres/wg-feed/.github/workflows/release.yaml@refs/tags/v.*' \
+	--certificate-oidc-issuer https://token.actions.githubusercontent.com \
+	checksums.txt
+```
+
+### Images
+
+Container images are pushed with BuildKit provenance and SBOM attestations, and each image digest is signed with cosign keyless signatures.
+
+To verify an image signature and provenance attestation:
+
+```bash
+IMAGE=ghcr.io/exeteres/wg-feed/server:v0.5.1
+
+cosign verify \
+	--certificate-identity-regexp 'https://github.com/exeteres/wg-feed/.github/workflows/release.yaml@refs/tags/v.*' \
+	--certificate-oidc-issuer https://token.actions.githubusercontent.com \
+	${IMAGE}
+
+cosign verify-attestation \
+	--type slsaprovenance \
+	--certificate-identity-regexp 'https://github.com/exeteres/wg-feed/.github/workflows/release.yaml@refs/tags/v.*' \
+	--certificate-oidc-issuer https://token.actions.githubusercontent.com \
+	${IMAGE}
+```
+
 ## Contributing
 
 Contributions are welcome! Please open issues or pull requests for bug reports, feature requests, or improvements. No special process is required.

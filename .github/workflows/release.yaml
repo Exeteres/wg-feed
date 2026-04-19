@@ -15,6 +15,7 @@ jobs:
     permissions:
       contents: write
       packages: write
+      id-token: write
 
     steps:
       - name: Checkout
@@ -27,6 +28,9 @@ jobs:
         with:
           go-version-file: go.mod
           cache: true
+
+      - name: Install cosign
+        uses: sigstore/cosign-installer@v3
 
       - name: Run GoReleaser
         uses: goreleaser/goreleaser-action@v6
@@ -51,6 +55,7 @@ jobs:
         uses: docker/setup-buildx-action@v3
 
       - name: Build and push wg-feed-server
+        id: build_server
         uses: docker/build-push-action@v6
         with:
           context: .
@@ -62,10 +67,17 @@ jobs:
           platforms: linux/amd64,linux/arm64
           cache-from: type=gha
           cache-to: type=gha,mode=max
+          provenance: mode=max
+          sbom: true
           build-args: |
             CMD=wg-feed-server
 
+      - name: Sign wg-feed-server image
+        run: |
+          cosign sign --yes "${IMAGE_PREFIX}/server@${{ steps.build_server.outputs.digest }}"
+
       - name: Build and push wg-feed-upload
+        id: build_upload
         uses: docker/build-push-action@v6
         with:
           context: .
@@ -77,10 +89,17 @@ jobs:
           platforms: linux/amd64,linux/arm64
           cache-from: type=gha
           cache-to: type=gha,mode=max
+          provenance: mode=max
+          sbom: true
           build-args: |
             CMD=wg-feed-upload
 
+      - name: Sign wg-feed-upload image
+        run: |
+          cosign sign --yes "${IMAGE_PREFIX}/upload@${{ steps.build_upload.outputs.digest }}"
+
       - name: Build and push wg-feed-daemon
+        id: build_daemon
         uses: docker/build-push-action@v6
         with:
           context: .
@@ -92,10 +111,17 @@ jobs:
           platforms: linux/amd64,linux/arm64
           cache-from: type=gha
           cache-to: type=gha,mode=max
+          provenance: mode=max
+          sbom: true
           build-args: |
             CMD=wg-feed-daemon
 
+      - name: Sign wg-feed-daemon image
+        run: |
+          cosign sign --yes "${IMAGE_PREFIX}/daemon@${{ steps.build_daemon.outputs.digest }}"
+
       - name: Build and push wg-feed-apply
+        id: build_apply
         uses: docker/build-push-action@v6
         with:
           context: .
@@ -107,5 +133,11 @@ jobs:
           platforms: linux/amd64,linux/arm64
           cache-from: type=gha
           cache-to: type=gha,mode=max
+          provenance: mode=max
+          sbom: true
           build-args: |
             CMD=wg-feed-apply
+
+      - name: Sign wg-feed-apply image
+        run: |
+          cosign sign --yes "${IMAGE_PREFIX}/apply@${{ steps.build_apply.outputs.digest }}"
