@@ -41,7 +41,7 @@ Linux (systemd):
 curl -fsSL https://raw.githubusercontent.com/exeteres/wg-feed/main/scripts/install.sh | bash
 ```
 
-Windows (run in PowerShell):
+Windows (run in PowerShell as admin):
 
 ```powershell
 irm https://raw.githubusercontent.com/exeteres/wg-feed/main/scripts/install.ps1 | iex

@@ -16,10 +16,14 @@ function Test-IsAdmin {
 
 function Get-Arch {
     $arch = ($env:PROCESSOR_ARCHITEW6432, $env:PROCESSOR_ARCHITECTURE | Where-Object { $_ } | Select-Object -First 1)
+    if (-not $arch) {
+        throw "unsupported architecture: unknown"
+    }
+    $arch = $arch.Trim().ToUpperInvariant()
     if ($arch -match "ARM64") {
         return "arm64"
     }
-    if ($arch -match "AMD64|X86_64") {
+    if ($arch -match "AMD64|X86_64|X64") {
         return "amd64"
     }
     throw "unsupported architecture: $arch"
@@ -55,16 +59,19 @@ function Get-FileSha256 {
     return (Get-FileHash -Algorithm SHA256 -Path $Path).Hash.ToLowerInvariant()
 }
 
+function Convert-ContentToText {
+    param($Content)
+    if ($Content -is [byte[]]) {
+        return [System.Text.Encoding]::UTF8.GetString($Content)
+    }
+    return [string]$Content
+}
+
 function Test-IsWindowsHost {
     if ($null -ne (Get-Variable -Name IsWindows -ErrorAction SilentlyContinue)) {
         return [bool]$IsWindows
     }
     return [System.Environment]::OSVersion.Platform -eq [System.PlatformID]::Win32NT
-}
-
-function To-SingleQuotedLiteral {
-    param([string]$Value)
-    return "'" + ($Value -replace "'", "''") + "'"
 }
 
 function Invoke-Installer {
@@ -75,33 +82,40 @@ function Invoke-Installer {
         [string[]]$Args
     )
 
+    $env:WG_FEED_VERSION = $VersionTag
+    $env:WG_FEED_DAEMON_CHECKSUM = $DaemonChecksum
+    $allArgs = @()
+    if ($null -ne $Args) {
+        $allArgs += $Args
+    }
+
     if (Test-IsAdmin) {
-        $env:WG_FEED_VERSION = $VersionTag
-        $env:WG_FEED_DAEMON_CHECKSUM = $DaemonChecksum
-        & $InstallerPath @Args
+        if ($allArgs.Count -gt 0) {
+            & $InstallerPath @allArgs
+        }
+        else {
+            & $InstallerPath
+        }
         if ($LASTEXITCODE -ne $null) {
             exit $LASTEXITCODE
         }
         return
     }
-
-    $installerLit = To-SingleQuotedLiteral $InstallerPath
-    $tagLit = To-SingleQuotedLiteral $VersionTag
-    $checksumLit = To-SingleQuotedLiteral $DaemonChecksum
-    $argLits = @()
-    foreach ($arg in $Args) {
-        $argLits += To-SingleQuotedLiteral $arg
-    }
-    $argsExpr = if ($argLits.Count -gt 0) { "@(" + ($argLits -join ",") + ")" } else { "@()" }
-
-    $command = "$env:WG_FEED_VERSION=$tagLit; $env:WG_FEED_DAEMON_CHECKSUM=$checksumLit; & $installerLit $argsExpr; exit `$LASTEXITCODE"
-    $psExe = (Get-Process -Id $PID).Path
     try {
-        $proc = Start-Process -FilePath $psExe -Verb RunAs -ArgumentList @("-NoProfile", "-ExecutionPolicy", "Bypass", "-Command", $command) -Wait -PassThru
+        if ($allArgs.Count -gt 0) {
+            $proc = Start-Process -FilePath $InstallerPath -Verb RunAs -ArgumentList $allArgs -Wait -PassThru
+        }
+        else {
+            $proc = Start-Process -FilePath $InstallerPath -Verb RunAs -Wait -PassThru
+        }
         exit $proc.ExitCode
     }
     catch {
-        throw "administrator rights are required to install service/files; elevation was declined or failed"
+        $msg = $_.Exception.Message
+        if ($_.Exception.InnerException -and $_.Exception.InnerException.Message) {
+            $msg = "$msg | inner: $($_.Exception.InnerException.Message)"
+        }
+        throw "failed to start elevated installer: $msg"
     }
 }
 
@@ -119,15 +133,15 @@ $tagVersion = $tag.TrimStart("v")
 $installerAsset = "wg-feed-installer_${tagVersion}_windows_${arch}.exe"
 $daemonAsset = "wg-feed-daemon_${tagVersion}_windows_${arch}.exe"
 $baseUrl = "https://github.com/$RepoOwner/$RepoName/releases/download/$tag"
-$installerUrl = "$baseUrl/$installerAsset"
 $checksumsUrl = "$baseUrl/checksums.txt"
 
-$checksumsText = (Invoke-WebRequest -UseBasicParsing -Uri $checksumsUrl).Content
+$checksumsText = Convert-ContentToText -Content ((Invoke-WebRequest -UseBasicParsing -Uri $checksumsUrl).Content)
 $installerChecksum = Get-ChecksumForAsset -ChecksumsText $checksumsText -AssetName $installerAsset
 $daemonChecksum = Get-ChecksumForAsset -ChecksumsText $checksumsText -AssetName $daemonAsset
+$installerUrl = "$baseUrl/$installerAsset"
 
 $tmpDir = Join-Path $env:TEMP "wg-feed-installer-cache"
-$installerBin = Join-Path $tmpDir "$installerAsset-$tag"
+$installerBin = Join-Path $tmpDir $installerAsset
 New-Item -ItemType Directory -Path $tmpDir -Force | Out-Null
 
 $needDownload = $true
