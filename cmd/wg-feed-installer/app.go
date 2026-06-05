@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"fmt"
+	"runtime"
 	"slices"
 	"sort"
 	"strings"
@@ -540,6 +541,14 @@ func (m installerModel) handleListEnter() (tea.Model, tea.Cmd) {
 				m.errMsg = "no backends configured; change set of backends first"
 				return m, nil
 			}
+			if m.windowsOnlyBackendMode() && len(m.update.plans) == 1 {
+				m.update.selectedIndex = 0
+				m.update.tunnelMode = updateTunnelModeOne
+				selected := m.update.plans[0]
+				m.pushNav()
+				m.startUpdateTunnelSelector(selected.Type, selected.EnabledTunnels)
+				return m, nil
+			}
 			m.pushNav()
 			m.screen = screenUpdateTunnelsSelectBackend
 			options := make([]string, 0, len(m.update.plans))
@@ -720,6 +729,13 @@ func (m installerModel) handleInputEnter() (tea.Model, tea.Cmd) {
 		m.add.doc = doc
 		m.add.plans = nil
 		m.errMsg = ""
+		if m.windowsOnlyBackendMode() {
+			m.add.backends = []config.BackendType{config.BackendWindows}
+			m.add.backendIdx = 0
+			m.pushNav()
+			m.startAddTunnelSelector(config.BackendWindows, installer.TunnelChoice{Provided: false})
+			return m, nil
+		}
 		m.pushNav()
 		m.startAddBackendsSelector()
 		return m, nil
@@ -794,7 +810,11 @@ func (m *installerModel) startUpdateMenu(label string) {
 func (m *installerModel) startUpdateActionMenu() {
 	m.screen = screenUpdateMenu
 	m.status = ""
-	actions := []string{updateActionChangeURL, updateActionChangeBackends, updateActionChangeTunnels}
+	actions := []string{updateActionChangeURL}
+	if !m.windowsOnlyBackendMode() {
+		actions = append(actions, updateActionChangeBackends)
+	}
+	actions = append(actions, updateActionChangeTunnels)
 	defaultIdx := 0
 	if m.isUpdateDirty() {
 		actions = append(actions, updateActionApply)
@@ -1200,6 +1220,11 @@ func (m *installerModel) toggleCurrentSelection() {
 }
 
 func (m *installerModel) selectedBackendsFromList() ([]config.BackendType, error) {
+	allowed := map[config.BackendType]struct{}{}
+	for _, bt := range m.backendTypesForPlatform() {
+		allowed[bt] = struct{}{}
+	}
+
 	out := make([]config.BackendType, 0, len(m.list.Items()))
 	for _, item := range m.list.Items() {
 		opt, ok := item.(multiOptionItem)
@@ -1207,8 +1232,7 @@ func (m *installerModel) selectedBackendsFromList() ([]config.BackendType, error
 			continue
 		}
 		bt := config.BackendType(opt.value)
-		switch bt {
-		case config.BackendNetworkManager, config.BackendWGQuick, config.BackendNetNS:
+		if _, ok := allowed[bt]; ok {
 			out = append(out, bt)
 		}
 	}
@@ -1259,15 +1283,18 @@ func (m *installerModel) selectedTunnelChoiceFromList(availableIDs []string) (in
 }
 
 func (m *installerModel) startAddBackendsSelector() {
+	if m.windowsOnlyBackendMode() {
+		m.screen = screenAddTunnelSelect
+		m.add.backends = []config.BackendType{config.BackendWindows}
+		m.add.backendIdx = 0
+		m.startAddTunnelSelector(config.BackendWindows, installer.TunnelChoice{Provided: false})
+		return
+	}
+
 	m.screen = screenAddBackendsSelect
 	m.errMsg = ""
 	m.status = ""
-	order := []string{string(config.BackendNetworkManager), string(config.BackendWGQuick), string(config.BackendNetNS)}
-	labels := map[string]string{
-		string(config.BackendNetworkManager): "networkmanager",
-		string(config.BackendWGQuick):        "wg-quick",
-		string(config.BackendNetNS):          "netns",
-	}
+	order, labels := backendSelectionOptions(m.backendTypesForPlatform())
 	m.setMultiSelect("Select backends", order, labels, []string{string(config.BackendWGQuick)}, true)
 }
 
@@ -1296,20 +1323,53 @@ func (m *installerModel) startAddTunnelSelector(bt config.BackendType, preset in
 }
 
 func (m *installerModel) startUpdateBackendsSelector() {
+	if m.windowsOnlyBackendMode() {
+		m.update.pendingAll = []config.BackendType{config.BackendWindows}
+		m.update.pending = nil
+		m.update.pendingKeep = map[config.BackendType]installer.TunnelChoice{}
+		m.update.pendingNew = map[config.BackendType]installer.TunnelChoice{}
+		for _, plan := range m.update.plans {
+			if plan.Type == config.BackendWindows {
+				m.update.pendingKeep[config.BackendWindows] = plan.EnabledTunnels
+				break
+			}
+		}
+		m.update.plans = m.buildPendingPlans()
+		m.startUpdateActionMenu()
+		return
+	}
+
 	m.screen = screenUpdateBackendsSelect
 	m.errMsg = ""
 	m.status = ""
-	order := []string{string(config.BackendNetworkManager), string(config.BackendWGQuick), string(config.BackendNetNS)}
-	labels := map[string]string{
-		string(config.BackendNetworkManager): "networkmanager",
-		string(config.BackendWGQuick):        "wg-quick",
-		string(config.BackendNetNS):          "netns",
-	}
+	order, labels := backendSelectionOptions(m.backendTypesForPlatform())
 	selected := make([]string, 0, len(m.update.plans))
 	for _, plan := range m.update.plans {
 		selected = append(selected, string(plan.Type))
 	}
 	m.setMultiSelect("Select backends", order, labels, selected, true)
+}
+
+func (m installerModel) windowsOnlyBackendMode() bool {
+	return runtime.GOOS == "windows"
+}
+
+func (m installerModel) backendTypesForPlatform() []config.BackendType {
+	if m.windowsOnlyBackendMode() {
+		return []config.BackendType{config.BackendWindows}
+	}
+	return []config.BackendType{config.BackendNetworkManager, config.BackendWGQuick, config.BackendNetNS}
+}
+
+func backendSelectionOptions(backends []config.BackendType) ([]string, map[string]string) {
+	order := make([]string, 0, len(backends))
+	labels := map[string]string{}
+	for _, bt := range backends {
+		value := string(bt)
+		order = append(order, value)
+		labels[value] = value
+	}
+	return order, labels
 }
 
 func (m *installerModel) startUpdateTunnelSelector(bt config.BackendType, preset installer.TunnelChoice) {
