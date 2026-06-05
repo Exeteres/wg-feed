@@ -24,6 +24,18 @@ type tunnelData struct {
 	ServiceName string `json:"service_name"`
 }
 
+func resolveProgramDataDir() string {
+	base := strings.TrimSpace(os.Getenv("ProgramData"))
+	if base == "" {
+		base = `C:\ProgramData`
+	}
+	return filepath.Join(base, "wg-feed")
+}
+
+func tunnelConfigPath(serviceName string) string {
+	return filepath.Join(resolveProgramDataDir(), "tunnels", serviceName+".conf")
+}
+
 func New(runner execx.Runner, logger *slog.Logger) *Backend {
 	return &Backend{Runner: runner, Logger: logger}
 }
@@ -59,6 +71,7 @@ func (b *Backend) Apply(ctx context.Context, tunnel shared.ResolvedTunnel, state
 	// and /uninstalltunnelservice <tunnelName>.
 	b.Logger.Debug("windows uninstall tunnel service", "service_name", name)
 	_, _ = b.Runner.Run(ctx, "wireguard.exe", "/uninstalltunnelservice", name)
+	_ = os.Remove(tunnelConfigPath(name))
 	if !enabled {
 		b.Logger.Debug("windows apply disabled completed", "service_name", name)
 		return state, nil
@@ -67,14 +80,10 @@ func (b *Backend) Apply(ctx context.Context, tunnel shared.ResolvedTunnel, state
 	if !strings.HasSuffix(wgQuickConfig, "\n") {
 		wgQuickConfig += "\n"
 	}
-	tmpDir, err := os.MkdirTemp("", "wg-feed-*")
-	if err != nil {
+	configPath := tunnelConfigPath(name)
+	if err := os.MkdirAll(filepath.Dir(configPath), 0o700); err != nil {
 		return state, err
 	}
-	defer func() {
-		_ = os.RemoveAll(tmpDir)
-	}()
-	configPath := filepath.Join(tmpDir, name+".conf")
 	if err := os.WriteFile(configPath, []byte(wgQuickConfig), 0o600); err != nil {
 		return state, err
 	}
@@ -95,6 +104,7 @@ func (b *Backend) Remove(ctx context.Context, state state.TunnelState) error {
 	}
 	b.Logger.Debug("windows remove uninstall tunnel service", "service_name", name)
 	_, _ = b.Runner.Run(ctx, "wireguard.exe", "/uninstalltunnelservice", name)
+	_ = os.Remove(tunnelConfigPath(name))
 	b.Logger.Debug("windows remove completed", "service_name", name)
 	return nil
 }

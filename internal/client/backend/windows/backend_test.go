@@ -6,6 +6,8 @@ import (
 	"errors"
 	"io"
 	"log/slog"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
@@ -83,7 +85,8 @@ func TestApply_Disabled_UninstallsOnlyAndPersistsServiceName(t *testing.T) {
 }
 
 func TestApply_Enabled_InstallsTunnelService(t *testing.T) {
-	t.Parallel()
+	tmp := t.TempDir()
+	t.Setenv("ProgramData", tmp)
 
 	r := &fakeRunner{}
 	b := newTestBackend(r)
@@ -103,6 +106,9 @@ func TestApply_Enabled_InstallsTunnelService(t *testing.T) {
 	if !strings.HasSuffix(strings.ToLower(install.args[1]), ".conf") {
 		t.Fatalf("expected install config path to end with .conf, got %q", install.args[1])
 	}
+	if !strings.HasPrefix(install.args[1], filepath.Join(tmp, "wg-feed", "tunnels")+string(filepath.Separator)) {
+		t.Fatalf("expected install config path under ProgramData tunnels, got %q", install.args[1])
+	}
 
 	var td tunnelData
 	if err := json.Unmarshal(nextState.Data, &td); err != nil {
@@ -113,8 +119,40 @@ func TestApply_Enabled_InstallsTunnelService(t *testing.T) {
 	}
 }
 
+func TestApply_Disabled_RemovesPersistedConfig(t *testing.T) {
+	tmp := t.TempDir()
+	t.Setenv("ProgramData", tmp)
+
+	name := "office"
+	path := tunnelConfigPath(name)
+	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
+		t.Fatalf("mkdir: %v", err)
+	}
+	if err := os.WriteFile(path, []byte("x"), 0o600); err != nil {
+		t.Fatalf("write: %v", err)
+	}
+
+	data, err := json.Marshal(tunnelData{ServiceName: name})
+	if err != nil {
+		t.Fatalf("marshal state data: %v", err)
+	}
+
+	r := &fakeRunner{}
+	b := newTestBackend(r)
+	tunnel := enabledTunnel("ignored")
+	tunnel.EffectiveEnabled = false
+	if _, err := b.Apply(context.Background(), tunnel, state.TunnelState{Data: data}); err != nil {
+		t.Fatalf("Apply error: %v", err)
+	}
+
+	if _, err := os.Stat(path); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("expected config to be removed, stat err=%v", err)
+	}
+}
+
 func TestApply_UsesPersistedServiceNameWithoutLookup(t *testing.T) {
-	t.Parallel()
+	tmp := t.TempDir()
+	t.Setenv("ProgramData", tmp)
 
 	r := &fakeRunner{}
 	b := newTestBackend(r)
@@ -152,10 +190,19 @@ func TestRemove_EmptyState_Noop(t *testing.T) {
 }
 
 func TestRemove_UninstallsPersistedService(t *testing.T) {
-	t.Parallel()
+	tmp := t.TempDir()
+	t.Setenv("ProgramData", tmp)
 
 	r := &fakeRunner{}
 	b := newTestBackend(r)
+
+	path := tunnelConfigPath("persisted")
+	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
+		t.Fatalf("mkdir: %v", err)
+	}
+	if err := os.WriteFile(path, []byte("x"), 0o600); err != nil {
+		t.Fatalf("write: %v", err)
+	}
 
 	data, err := json.Marshal(tunnelData{ServiceName: "persisted"})
 	if err != nil {
@@ -170,6 +217,9 @@ func TestRemove_UninstallsPersistedService(t *testing.T) {
 	}
 	if r.calls[0].name != "wireguard.exe" || len(r.calls[0].args) != 2 || r.calls[0].args[0] != "/uninstalltunnelservice" || r.calls[0].args[1] != "persisted" {
 		t.Fatalf("unexpected command: %#v", r.calls[0])
+	}
+	if _, err := os.Stat(path); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("expected config to be removed, stat err=%v", err)
 	}
 }
 

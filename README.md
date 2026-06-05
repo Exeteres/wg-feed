@@ -27,18 +27,24 @@ The SSE and encryption features are optional.
 | [cmd/wg-feed-upload](cmd/wg-feed-upload)       | Upload helper: computes `revision` and writes feed entries to etcd. |
 | [cmd/wg-feed-apply](cmd/wg-feed-apply)         | One-shot client: fetch + reconcile/apply once.                      |
 | [cmd/wg-feed-daemon](cmd/wg-feed-daemon)       | Long-running client: sync + reconcile over time.                    |
-| [cmd/wg-feed-installer](cmd/wg-feed-installer) | Interactive Linux installer/updater for daemon config and systemd.  |
+| [cmd/wg-feed-installer](cmd/wg-feed-installer) | Interactive installer/updater for daemon config and service setup.  |
 | [docs](docs)                                   | Draft spec, JSON schema, and examples.                              |
 | [internal](internal)                           | Shared Go packages (not a public API).                              |
 
 ## Interactive Installer
 
-This repository provides an interactive installer to configure and install `wg-feed-daemon` on Linux distributions that use systemd.
+This repository provides an interactive installer to configure and install `wg-feed-daemon`.
 
-Run it directly from the repository script:
+Linux (systemd):
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/exeteres/wg-feed/main/scripts/install.sh | bash
+```
+
+Windows (run in PowerShell):
+
+```powershell
+irm https://raw.githubusercontent.com/exeteres/wg-feed/main/scripts/install.ps1 | iex
 ```
 
 ## Nix / NixOS

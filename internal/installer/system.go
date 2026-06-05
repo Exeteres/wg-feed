@@ -21,16 +21,18 @@ import (
 	"gopkg.in/yaml.v3"
 )
 
-const (
-	DefaultConfigPath = "/etc/wg-feed/config.yaml"
-	DefaultUnitPath   = "/etc/systemd/system/wg-feed-daemon.service"
-	DefaultDaemonPath = "/usr/local/bin/wg-feed-daemon"
+var (
+	DefaultConfigPath = defaultConfigPathForGOOS(runtime.GOOS, os.Getenv("ProgramData"))
+	DefaultUnitPath   = defaultUnitPathForGOOS(runtime.GOOS)
+	DefaultDaemonPath = defaultDaemonPathForGOOS(runtime.GOOS, os.Getenv("ProgramData"))
+	DefaultService    = "wg-feed-daemon"
 )
 
 type ApplyOptions struct {
 	ConfigPath     string
 	UnitPath       string
 	DaemonPath     string
+	ServiceName    string
 	ReleaseTag     string
 	DaemonChecksum string
 	// DownloadProgress receives daemon download progress in bytes.
@@ -50,11 +52,14 @@ func NormalizeApplyOptions(opts ApplyOptions) ApplyOptions {
 	if strings.TrimSpace(opts.ConfigPath) == "" {
 		opts.ConfigPath = DefaultConfigPath
 	}
-	if strings.TrimSpace(opts.UnitPath) == "" {
+	if runtime.GOOS != "windows" && strings.TrimSpace(opts.UnitPath) == "" {
 		opts.UnitPath = DefaultUnitPath
 	}
 	if strings.TrimSpace(opts.DaemonPath) == "" {
 		opts.DaemonPath = DefaultDaemonPath
+	}
+	if strings.TrimSpace(opts.ServiceName) == "" {
+		opts.ServiceName = DefaultService
 	}
 	return opts
 }
@@ -107,12 +112,10 @@ func InstallDaemonBinary(ctx context.Context, daemonPath string, releaseTag stri
 	if releaseTag == "" {
 		return fmt.Errorf("missing release tag for daemon download")
 	}
-	arch, err := detectReleaseArch()
+	asset, err := daemonReleaseAssetName(releaseTag)
 	if err != nil {
 		return err
 	}
-	releaseVersion := strings.TrimPrefix(releaseTag, "v")
-	asset := fmt.Sprintf("wg-feed-daemon_%s_linux_%s", releaseVersion, arch)
 	url := fmt.Sprintf("https://github.com/exeteres/wg-feed/releases/download/%s/%s", releaseTag, asset)
 
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
@@ -192,9 +195,11 @@ func ApplyConfigSystem(ctx context.Context, cfg config.Config, opts ApplyOptions
 		return err
 	}
 
-	unitText := BuildSystemdUnit(opts.ConfigPath, HasNetNSBackendConfig(cfg))
-	if err := writeFileAtomic(opts.UnitPath, []byte(unitText), 0o644); err != nil {
-		return err
+	if runtime.GOOS != "windows" {
+		unitText := BuildSystemdUnit(opts.ConfigPath, HasNetNSBackendConfig(cfg))
+		if err := writeFileAtomic(opts.UnitPath, []byte(unitText), 0o644); err != nil {
+			return err
+		}
 	}
 
 	if strings.TrimSpace(opts.ReleaseTag) == "" {
@@ -203,21 +208,39 @@ func ApplyConfigSystem(ctx context.Context, cfg config.Config, opts ApplyOptions
 	if strings.TrimSpace(opts.DaemonChecksum) == "" {
 		return fmt.Errorf("DaemonChecksum is required")
 	}
-	if err := InstallDaemonBinary(ctx, opts.DaemonPath, opts.ReleaseTag, opts.DownloadProgress); err != nil {
+	status, _, err := CurrentDaemonStatus(opts)
+	if err != nil {
 		return err
 	}
-	if err := verifyFileSHA256(opts.DaemonPath, opts.DaemonChecksum); err != nil {
-		return fmt.Errorf("verify daemon checksum: %w", err)
+	if status != DaemonStatusOK {
+		if err := InstallDaemonBinary(ctx, opts.DaemonPath, opts.ReleaseTag, opts.DownloadProgress); err != nil {
+			return err
+		}
+		if err := verifyFileSHA256(opts.DaemonPath, opts.DaemonChecksum); err != nil {
+			return fmt.Errorf("verify daemon checksum: %w", err)
+		}
+	}
+
+	if runtime.GOOS == "windows" {
+		if err := ensureWindowsService(ctx, opts.ServiceName, opts.DaemonPath, opts.ConfigPath); err != nil {
+			return err
+		}
+		if err := runSC(ctx, "start", opts.ServiceName); err != nil {
+			if !isWindowsServiceAlreadyRunning(err) {
+				return err
+			}
+		}
+		return nil
 	}
 
 	if err := runSystemctl(ctx, "daemon-reload"); err != nil {
 		return err
 	}
-	if err := runSystemctl(ctx, "enable", "wg-feed-daemon"); err != nil {
+	if err := runSystemctl(ctx, "enable", opts.ServiceName); err != nil {
 		return err
 	}
-	if err := runSystemctl(ctx, "restart", "wg-feed-daemon"); err != nil {
-		if err2 := runSystemctl(ctx, "start", "wg-feed-daemon"); err2 != nil {
+	if err := runSystemctl(ctx, "restart", opts.ServiceName); err != nil {
+		if err2 := runSystemctl(ctx, "start", opts.ServiceName); err2 != nil {
 			return err
 		}
 	}
@@ -251,15 +274,28 @@ func HasNetNSBackendConfig(cfg config.Config) bool {
 
 func DetectInstallTraces(ctx context.Context, opts ApplyOptions) bool {
 	opts = NormalizeApplyOptions(opts)
-	for _, path := range []string{opts.ConfigPath, opts.UnitPath, opts.DaemonPath} {
+	paths := []string{opts.ConfigPath, opts.DaemonPath}
+	if runtime.GOOS != "windows" {
+		paths = append(paths, opts.UnitPath)
+	}
+	for _, path := range paths {
+		if strings.TrimSpace(path) == "" {
+			continue
+		}
 		if _, err := os.Stat(path); err == nil {
 			return true
 		}
 	}
-	if err := runSystemctl(ctx, "is-enabled", "wg-feed-daemon"); err == nil {
+	if runtime.GOOS == "windows" {
+		if _, err := runSCOutput(ctx, "query", opts.ServiceName); err == nil {
+			return true
+		}
+		return false
+	}
+	if err := runSystemctl(ctx, "is-enabled", opts.ServiceName); err == nil {
 		return true
 	}
-	if err := runSystemctl(ctx, "status", "wg-feed-daemon"); err == nil {
+	if err := runSystemctl(ctx, "status", opts.ServiceName); err == nil {
 		return true
 	}
 	return false
@@ -286,9 +322,20 @@ func CurrentDaemonStatus(opts ApplyOptions) (DaemonStatus, string, error) {
 
 func UninstallSystem(ctx context.Context, opts ApplyOptions) error {
 	opts = NormalizeApplyOptions(opts)
+	if runtime.GOOS == "windows" {
+		_ = runSC(ctx, "stop", opts.ServiceName)
+		_ = runSC(ctx, "delete", opts.ServiceName)
 
-	_ = runSystemctl(ctx, "stop", "wg-feed-daemon")
-	_ = runSystemctl(ctx, "disable", "wg-feed-daemon")
+		for _, path := range []string{opts.ConfigPath, opts.DaemonPath} {
+			if err := os.Remove(path); err != nil && !errors.Is(err, os.ErrNotExist) {
+				return err
+			}
+		}
+		return nil
+	}
+
+	_ = runSystemctl(ctx, "stop", opts.ServiceName)
+	_ = runSystemctl(ctx, "disable", opts.ServiceName)
 
 	for _, path := range []string{opts.ConfigPath, opts.UnitPath, opts.DaemonPath} {
 		if err := os.Remove(path); err != nil && !errors.Is(err, os.ErrNotExist) {
@@ -336,6 +383,58 @@ func runSystemctl(ctx context.Context, args ...string) error {
 	return nil
 }
 
+func runSC(ctx context.Context, args ...string) error {
+	_, err := runSCOutput(ctx, args...)
+	return err
+}
+
+func runSCOutput(ctx context.Context, args ...string) (string, error) {
+	cmd := exec.CommandContext(ctx, "sc.exe", args...)
+	out, err := cmd.CombinedOutput()
+	text := strings.TrimSpace(string(out))
+	if err != nil {
+		return text, fmt.Errorf("sc.exe %s: %w (%s)", strings.Join(args, " "), err, text)
+	}
+	return text, nil
+}
+
+func ensureWindowsService(ctx context.Context, serviceName string, daemonPath string, configPath string) error {
+	serviceName = strings.TrimSpace(serviceName)
+	if serviceName == "" {
+		return fmt.Errorf("ServiceName is required")
+	}
+	binPath := fmt.Sprintf("\"%s\" --config \"%s\"", daemonPath, configPath)
+	if _, err := runSCOutput(ctx, "query", serviceName); err != nil {
+		if !isWindowsServiceMissing(err) {
+			return err
+		}
+		return runSC(
+			ctx,
+			"create", serviceName,
+			"binPath=", binPath,
+			"start=", "auto",
+			"DisplayName=", "wg-feed daemon",
+		)
+	}
+	return runSC(ctx, "config", serviceName, "binPath=", binPath, "start=", "auto")
+}
+
+func isWindowsServiceMissing(err error) bool {
+	if err == nil {
+		return false
+	}
+	msg := strings.ToLower(err.Error())
+	return strings.Contains(msg, "failed 1060") || strings.Contains(msg, "does not exist")
+}
+
+func isWindowsServiceAlreadyRunning(err error) bool {
+	if err == nil {
+		return false
+	}
+	msg := strings.ToLower(err.Error())
+	return strings.Contains(msg, "already running") || strings.Contains(msg, "1056")
+}
+
 func detectReleaseArch() (string, error) {
 	switch runtime.GOARCH {
 	case "amd64":
@@ -345,6 +444,54 @@ func detectReleaseArch() (string, error) {
 	default:
 		return "", fmt.Errorf("unsupported arch %q", runtime.GOARCH)
 	}
+}
+
+func daemonReleaseAssetName(releaseTag string) (string, error) {
+	releaseVersion := strings.TrimPrefix(strings.TrimSpace(releaseTag), "v")
+	if releaseVersion == "" {
+		return "", fmt.Errorf("missing release tag for daemon download")
+	}
+	arch, err := detectReleaseArch()
+	if err != nil {
+		return "", err
+	}
+	switch runtime.GOOS {
+	case "linux":
+		return fmt.Sprintf("wg-feed-daemon_%s_linux_%s", releaseVersion, arch), nil
+	case "windows":
+		return fmt.Sprintf("wg-feed-daemon_%s_windows_%s.exe", releaseVersion, arch), nil
+	default:
+		return "", fmt.Errorf("unsupported os %q", runtime.GOOS)
+	}
+}
+
+func defaultConfigPathForGOOS(goos string, programData string) string {
+	if goos == "windows" {
+		base := strings.TrimSpace(programData)
+		if base == "" {
+			base = `C:\ProgramData`
+		}
+		return filepath.Join(base, "wg-feed", "config.yaml")
+	}
+	return "/etc/wg-feed/config.yaml"
+}
+
+func defaultUnitPathForGOOS(goos string) string {
+	if goos == "windows" {
+		return ""
+	}
+	return "/etc/systemd/system/wg-feed-daemon.service"
+}
+
+func defaultDaemonPathForGOOS(goos string, programData string) string {
+	if goos == "windows" {
+		base := strings.TrimSpace(programData)
+		if base == "" {
+			base = `C:\ProgramData`
+		}
+		return filepath.Join(base, "wg-feed", "wg-feed-daemon.exe")
+	}
+	return "/usr/local/bin/wg-feed-daemon"
 }
 
 type downloadProgressReader struct {

@@ -24,9 +24,10 @@ func main() {
 	configPath := flag.String("config", installer.DefaultConfigPath, "path to wg-feed config file")
 	unitPath := flag.String("unit", installer.DefaultUnitPath, "path to systemd unit file")
 	daemonPath := flag.String("daemon", installer.DefaultDaemonPath, "path to install wg-feed-daemon binary")
+	serviceName := flag.String("service", installer.DefaultService, "daemon service name")
 	flag.Parse()
 
-	if os.Geteuid() != 0 {
+	if requiresPrivilegedInstall() {
 		fmt.Fprintln(os.Stderr, "wg-feed-installer must run as root")
 		os.Exit(1)
 	}
@@ -34,6 +35,7 @@ func main() {
 		ConfigPath:     *configPath,
 		UnitPath:       *unitPath,
 		DaemonPath:     *daemonPath,
+		ServiceName:    *serviceName,
 		ReleaseTag:     releaseTag,
 		DaemonChecksum: daemonChecksum,
 	})

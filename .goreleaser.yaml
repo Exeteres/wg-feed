@@ -60,13 +60,14 @@ builds:
       - CGO_ENABLED=0
     goos:
       - linux
+      - windows
     goarch:
       - amd64
       - arm64
 
 archives:
   - id: binaries
-    formats: [binary]
+    formats: [ binary ]
     ids:
       - wg-feed-server
       - wg-feed-upload
