@@ -26,6 +26,16 @@ func TestParseBackendsInput(t *testing.T) {
 	}
 }
 
+func TestParseBackendsInput_WindowsManager(t *testing.T) {
+	bs, err := ParseBackendsInput("windows-manager,windows")
+	if err != nil {
+		t.Fatalf("ParseBackendsInput error: %v", err)
+	}
+	if len(bs) != 2 || bs[0] != config.BackendWindowsManager || bs[1] != config.BackendWindows {
+		t.Fatalf("unexpected backends: %#v", bs)
+	}
+}
+
 func TestParseTunnelInput_All(t *testing.T) {
 	choice, err := ParseTunnelInput("all", []string{"t1", "t2"})
 	if err != nil {

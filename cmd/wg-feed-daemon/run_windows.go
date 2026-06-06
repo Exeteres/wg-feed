@@ -15,7 +15,10 @@ import (
 	"golang.org/x/sys/windows/svc/eventlog"
 )
 
-const windowsServiceName = "wg-feed-daemon"
+const (
+	windowsServiceName     = "wg-feed-daemon"
+	windowsEventSourceName = "WG Feed Daemon"
+)
 
 func runDaemonEntry(cfg config.Config, logger *slog.Logger, run func(context.Context, config.Config, *slog.Logger) error) error {
 	isService, err := svc.IsWindowsService()
@@ -29,7 +32,7 @@ func runDaemonEntry(cfg config.Config, logger *slog.Logger, run func(context.Con
 	}
 
 	serviceLogger := logger
-	elog, err := eventlog.Open(windowsServiceName)
+	elog, err := eventlog.Open(windowsEventSourceName)
 	if err != nil {
 		logger.Warn("open windows event log failed, falling back to default logger", "err", err)
 	} else {

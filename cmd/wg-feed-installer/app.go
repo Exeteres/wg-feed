@@ -39,8 +39,8 @@ var (
 		key.WithHelp("esc", "cancel"),
 	)
 	keyToggle = key.NewBinding(
-		key.WithKeys("space"),
-		key.WithHelp("space", "toggle"),
+		key.WithKeys("space", " ", "x"),
+		key.WithHelp("space/x", "toggle"),
 	)
 )
 
@@ -542,7 +542,7 @@ func (m installerModel) handleListEnter() (tea.Model, tea.Cmd) {
 				m.errMsg = "no backends configured; change set of backends first"
 				return m, nil
 			}
-			if m.windowsOnlyBackendMode() && len(m.update.plans) == 1 {
+			if len(m.update.plans) == 1 {
 				m.update.selectedIndex = 0
 				m.update.tunnelMode = updateTunnelModeOne
 				selected := m.update.plans[0]
@@ -731,13 +731,6 @@ func (m installerModel) handleInputEnter() (tea.Model, tea.Cmd) {
 		m.add.doc = doc
 		m.add.plans = nil
 		m.errMsg = ""
-		if m.windowsOnlyBackendMode() {
-			m.add.backends = []config.BackendType{config.BackendWindows}
-			m.add.backendIdx = 0
-			m.pushNav()
-			m.startAddTunnelSelector(config.BackendWindows, defaultTunnelChoiceForBackend(config.BackendWindows, docTunnelIDs(m.add.doc)))
-			return m, nil
-		}
 		m.pushNav()
 		m.startAddBackendsSelector()
 		return m, nil
@@ -813,7 +806,7 @@ func (m *installerModel) startUpdateActionMenu() {
 	m.screen = screenUpdateMenu
 	m.status = ""
 	actions := []string{updateActionChangeURL}
-	if !m.windowsOnlyBackendMode() {
+	if len(m.backendTypesForPlatform()) > 1 {
 		actions = append(actions, updateActionChangeBackends)
 	}
 	actions = append(actions, updateActionChangeTunnels)
@@ -1285,19 +1278,15 @@ func (m *installerModel) selectedTunnelChoiceFromList(availableIDs []string) (in
 }
 
 func (m *installerModel) startAddBackendsSelector() {
-	if m.windowsOnlyBackendMode() {
-		m.screen = screenAddTunnelSelect
-		m.add.backends = []config.BackendType{config.BackendWindows}
-		m.add.backendIdx = 0
-		m.startAddTunnelSelector(config.BackendWindows, defaultTunnelChoiceForBackend(config.BackendWindows, docTunnelIDs(m.add.doc)))
-		return
-	}
-
 	m.screen = screenAddBackendsSelect
 	m.errMsg = ""
 	m.status = ""
 	order, labels := backendSelectionOptions(m.backendTypesForPlatform())
-	m.setMultiSelect("Select backends", order, labels, []string{string(config.BackendWGQuick)}, true)
+	selected := []string{string(config.BackendWGQuick)}
+	if m.windowsOnlyBackendMode() {
+		selected = []string{string(config.BackendWindowsManager)}
+	}
+	m.setMultiSelect("Select backends", order, labels, selected, true)
 }
 
 func (m *installerModel) startAddTunnelSelector(bt config.BackendType, preset installer.TunnelChoice) {
@@ -1325,22 +1314,6 @@ func (m *installerModel) startAddTunnelSelector(bt config.BackendType, preset in
 }
 
 func (m *installerModel) startUpdateBackendsSelector() {
-	if m.windowsOnlyBackendMode() {
-		m.update.pendingAll = []config.BackendType{config.BackendWindows}
-		m.update.pending = nil
-		m.update.pendingKeep = map[config.BackendType]installer.TunnelChoice{}
-		m.update.pendingNew = map[config.BackendType]installer.TunnelChoice{}
-		for _, plan := range m.update.plans {
-			if plan.Type == config.BackendWindows {
-				m.update.pendingKeep[config.BackendWindows] = plan.EnabledTunnels
-				break
-			}
-		}
-		m.update.plans = m.buildPendingPlans()
-		m.startUpdateActionMenu()
-		return
-	}
-
 	m.screen = screenUpdateBackendsSelect
 	m.errMsg = ""
 	m.status = ""
@@ -1358,7 +1331,7 @@ func (m installerModel) windowsOnlyBackendMode() bool {
 
 func (m installerModel) backendTypesForPlatform() []config.BackendType {
 	if m.windowsOnlyBackendMode() {
-		return []config.BackendType{config.BackendWindows}
+		return []config.BackendType{config.BackendWindowsManager, config.BackendWindows}
 	}
 	return []config.BackendType{config.BackendNetworkManager, config.BackendWGQuick, config.BackendNetNS}
 }
@@ -1375,7 +1348,7 @@ func backendSelectionOptions(backends []config.BackendType) ([]string, map[strin
 }
 
 func defaultTunnelChoiceForBackend(bt config.BackendType, availableIDs []string) installer.TunnelChoice {
-	if bt == config.BackendWindows {
+	if bt == config.BackendWindows || bt == config.BackendWindowsManager {
 		return installer.TunnelChoice{Provided: true, IDs: dedupeStrings(availableIDs)}
 	}
 	return installer.TunnelChoice{Provided: false}

@@ -243,3 +243,35 @@ func TestLoad_EmptyBackendTunnelKey_Fails(t *testing.T) {
 		t.Fatalf("expected error")
 	}
 }
+
+func TestLoad_WindowsManagerBackend_Valid(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "config.yaml")
+	err := os.WriteFile(path, []byte(`{
+	"feeds": {
+		"feed1": {
+			"sync": {
+				"enabled": true,
+				"endpoints": [
+					"https://a.example/sub"
+				]
+			},
+			"backends": {
+				"b1": {
+					"type": "windows-manager"
+				}
+			}
+		}
+	}
+}`), 0o600)
+	if err != nil {
+		t.Fatalf("WriteFile: %v", err)
+	}
+
+	cfg, err := Load(path)
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if cfg.Feeds["feed1"].Backends["b1"].Type != BackendWindowsManager {
+		t.Fatalf("unexpected backend type: %q", cfg.Feeds["feed1"].Backends["b1"].Type)
+	}
+}

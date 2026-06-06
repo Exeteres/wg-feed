@@ -14,6 +14,8 @@ import (
 	"golang.org/x/sys/windows/svc/mgr"
 )
 
+const windowsEventSourceName = "WG Feed Daemon"
+
 func ensureWindowsService(_ context.Context, serviceName string, daemonPath string, configPath string) error {
 	serviceName = strings.TrimSpace(serviceName)
 	if serviceName == "" {
@@ -38,7 +40,7 @@ func ensureWindowsService(_ context.Context, serviceName string, daemonPath stri
 		}
 		defer func() { _ = s.Close() }()
 
-		if err := ensureWindowsEventSource(serviceName); err != nil {
+		if err := ensureWindowsEventSource(windowsEventSourceName); err != nil {
 			_ = s.Delete()
 			return fmt.Errorf("install event log source %q: %w", serviceName, err)
 		}
@@ -56,7 +58,7 @@ func ensureWindowsService(_ context.Context, serviceName string, daemonPath stri
 	if err := s.UpdateConfig(cfg); err != nil {
 		return fmt.Errorf("update service %q config: %w", serviceName, err)
 	}
-	if err := ensureWindowsEventSource(serviceName); err != nil {
+	if err := ensureWindowsEventSource(windowsEventSourceName); err != nil {
 		return fmt.Errorf("ensure event log source %q: %w", serviceName, err)
 	}
 	return nil
@@ -153,8 +155,8 @@ func deleteWindowsService(_ context.Context, serviceName string) error {
 	if err := s.Delete(); err != nil {
 		return fmt.Errorf("delete service %q: %w", serviceName, err)
 	}
-	if err := eventlog.Remove(serviceName); err != nil && !errors.Is(err, windows.ERROR_FILE_NOT_FOUND) {
-		return fmt.Errorf("remove event log source %q: %w", serviceName, err)
+	if err := eventlog.Remove(windowsEventSourceName); err != nil && !errors.Is(err, windows.ERROR_FILE_NOT_FOUND) {
+		return fmt.Errorf("remove event log source %q: %w", windowsEventSourceName, err)
 	}
 	return nil
 }

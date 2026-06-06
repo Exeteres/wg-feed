@@ -35,6 +35,7 @@ const (
 	BackendNetworkManager BackendType = "networkmanager"
 	BackendNetNS          BackendType = "netns"
 	BackendWindows        BackendType = "windows"
+	BackendWindowsManager BackendType = "windows-manager"
 )
 
 type SyncMode string
@@ -202,9 +203,9 @@ func normalizeAndValidate(cfg *Config) error {
 			}
 			backendType := BackendType(strings.ToLower(strings.TrimSpace(string(backendCfg.Type))))
 			switch backendType {
-			case BackendWGQuick, BackendNetworkManager, BackendNetNS, BackendWindows:
+			case BackendWGQuick, BackendNetworkManager, BackendNetNS, BackendWindows, BackendWindowsManager:
 			default:
-				return fmt.Errorf("feeds.%s.backends.%s.type must be one of %q, %q, %q, %q", feedLabel, backendLabel, BackendWGQuick, BackendNetworkManager, BackendNetNS, BackendWindows)
+				return fmt.Errorf("feeds.%s.backends.%s.type must be one of %q, %q, %q, %q, %q", feedLabel, backendLabel, BackendWGQuick, BackendNetworkManager, BackendNetNS, BackendWindows, BackendWindowsManager)
 			}
 			backendCfg.Type = backendType
 			for tunnelID := range backendCfg.Tunnels {

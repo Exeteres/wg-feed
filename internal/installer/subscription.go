@@ -76,7 +76,7 @@ func ConfigFeedBackends(fc config.FeedConfig) []config.BackendType {
 	set := map[config.BackendType]struct{}{}
 	for _, b := range fc.Backends {
 		switch b.Type {
-		case config.BackendNetworkManager, config.BackendWGQuick, config.BackendNetNS:
+		case config.BackendNetworkManager, config.BackendWGQuick, config.BackendNetNS, config.BackendWindows, config.BackendWindowsManager:
 			set[b.Type] = struct{}{}
 		}
 	}

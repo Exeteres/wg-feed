@@ -46,9 +46,9 @@ func ParseBackendsInput(input string) ([]config.BackendType, error) {
 		}
 		bt := config.BackendType(p)
 		switch bt {
-		case config.BackendNetworkManager, config.BackendWGQuick, config.BackendNetNS:
+		case config.BackendNetworkManager, config.BackendWGQuick, config.BackendNetNS, config.BackendWindows, config.BackendWindowsManager:
 		default:
-			return nil, fmt.Errorf("invalid backend %q (allowed: networkmanager, wg-quick, netns)", p)
+			return nil, fmt.Errorf("invalid backend %q (allowed: networkmanager, wg-quick, netns, windows, windows-manager)", p)
 		}
 		if _, ok := seen[bt]; ok {
 			continue

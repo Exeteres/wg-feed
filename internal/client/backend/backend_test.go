@@ -17,6 +17,7 @@ func TestNewForType_KnownBackends(t *testing.T) {
 		config.BackendNetworkManager,
 		config.BackendNetNS,
 		config.BackendWindows,
+		config.BackendWindowsManager,
 	}
 
 	for _, backendType := range types {

@@ -9,6 +9,7 @@ import (
 	"github.com/exeteres/wg-feed/internal/client/backend/shared"
 	"github.com/exeteres/wg-feed/internal/client/backend/wgquick"
 	"github.com/exeteres/wg-feed/internal/client/backend/windows"
+	"github.com/exeteres/wg-feed/internal/client/backend/windowsmanager"
 	"github.com/exeteres/wg-feed/internal/client/config"
 	"github.com/exeteres/wg-feed/internal/client/execx"
 )
@@ -27,6 +28,8 @@ func NewForType(backendType config.BackendType, logger *slog.Logger) (Backend, e
 		return netns.New(runner, backendLogger), nil
 	case config.BackendWindows:
 		return windows.New(runner, backendLogger), nil
+	case config.BackendWindowsManager:
+		return windowsmanager.New(backendLogger), nil
 	default:
 		return nil, fmt.Errorf("unknown backend %q", backendType)
 	}
