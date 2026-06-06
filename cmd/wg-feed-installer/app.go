@@ -303,6 +303,10 @@ func (m installerModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 			return m, nil
 		}
+		if m.isMultiSelectScreen() && key.Matches(msg, keyToggle) {
+			m.toggleCurrentSelection()
+			return m, nil
+		}
 		switch msg.Type {
 		case tea.KeyCtrlC:
 			m.quit = true
@@ -315,11 +319,6 @@ func (m installerModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m.refreshMainMenu("", "")
 			}
 			return m, nil
-		case tea.KeySpace:
-			if m.isMultiSelectScreen() {
-				m.toggleCurrentSelection()
-				return m, nil
-			}
 		case tea.KeyEnter:
 			if m.isListScreen() {
 				return m.handleListEnter()
@@ -478,7 +477,8 @@ func (m installerModel) handleListEnter() (tea.Model, tea.Cmd) {
 		m.add.backendIdx = 0
 		m.add.plans = nil
 		m.pushNav()
-		m.startAddTunnelSelector(m.add.backends[m.add.backendIdx], installer.TunnelChoice{Provided: false})
+		firstBackend := m.add.backends[m.add.backendIdx]
+		m.startAddTunnelSelector(firstBackend, defaultTunnelChoiceForBackend(firstBackend, docTunnelIDs(m.add.doc)))
 		return m, nil
 	case screenAddTunnelSelect:
 		if len(m.add.backends) == 0 {
@@ -500,7 +500,8 @@ func (m installerModel) handleListEnter() (tea.Model, tea.Cmd) {
 		m.add.backendIdx++
 		if m.add.backendIdx < len(m.add.backends) {
 			m.pushNav()
-			m.startAddTunnelSelector(m.add.backends[m.add.backendIdx], installer.TunnelChoice{Provided: false})
+			nextBackend := m.add.backends[m.add.backendIdx]
+			m.startAddTunnelSelector(nextBackend, defaultTunnelChoiceForBackend(nextBackend, docTunnelIDs(m.add.doc)))
 			return m, nil
 		}
 		feedCfg, err := installer.BuildFeedConfig(m.add.url, m.add.plans, m.add.doc)
@@ -510,7 +511,7 @@ func (m installerModel) handleListEnter() (tea.Model, tea.Cmd) {
 		}
 		m.cfg.Feeds[m.add.label] = feedCfg
 		if strings.TrimSpace(m.cfg.StatePath) == "" {
-			m.cfg.StatePath = config.DefaultStatePath
+			m.cfg.StatePath = installer.DefaultStatePath
 		}
 		return m, m.startApply("add")
 	case screenUpdateSelectSubscription:
@@ -611,7 +612,8 @@ func (m installerModel) handleListEnter() (tea.Model, tea.Cmd) {
 		m.update.backendIdx = 0
 		m.update.tunnelMode = updateTunnelModeAll
 		m.pushNav()
-		m.startUpdateTunnelSelector(m.update.pending[m.update.backendIdx], installer.TunnelChoice{Provided: false})
+		firstBackend := m.update.pending[m.update.backendIdx]
+		m.startUpdateTunnelSelector(firstBackend, defaultTunnelChoiceForBackend(firstBackend, docTunnelIDs(m.update.doc)))
 		return m, nil
 	case screenUpdateTunnelSelect:
 		choice, err := m.selectedTunnelChoiceFromList(docTunnelIDs(m.update.doc))
@@ -635,7 +637,7 @@ func (m installerModel) handleListEnter() (tea.Model, tea.Cmd) {
 		if m.update.backendIdx < len(m.update.pending) {
 			nextBackend := m.update.pending[m.update.backendIdx]
 			m.pushNav()
-			m.startUpdateTunnelSelector(nextBackend, installer.TunnelChoice{Provided: false})
+			m.startUpdateTunnelSelector(nextBackend, defaultTunnelChoiceForBackend(nextBackend, docTunnelIDs(m.update.doc)))
 			return m, nil
 		}
 		m.update.plans = m.buildPendingPlans()
@@ -733,7 +735,7 @@ func (m installerModel) handleInputEnter() (tea.Model, tea.Cmd) {
 			m.add.backends = []config.BackendType{config.BackendWindows}
 			m.add.backendIdx = 0
 			m.pushNav()
-			m.startAddTunnelSelector(config.BackendWindows, installer.TunnelChoice{Provided: false})
+			m.startAddTunnelSelector(config.BackendWindows, defaultTunnelChoiceForBackend(config.BackendWindows, docTunnelIDs(m.add.doc)))
 			return m, nil
 		}
 		m.pushNav()
@@ -1287,7 +1289,7 @@ func (m *installerModel) startAddBackendsSelector() {
 		m.screen = screenAddTunnelSelect
 		m.add.backends = []config.BackendType{config.BackendWindows}
 		m.add.backendIdx = 0
-		m.startAddTunnelSelector(config.BackendWindows, installer.TunnelChoice{Provided: false})
+		m.startAddTunnelSelector(config.BackendWindows, defaultTunnelChoiceForBackend(config.BackendWindows, docTunnelIDs(m.add.doc)))
 		return
 	}
 
@@ -1370,6 +1372,13 @@ func backendSelectionOptions(backends []config.BackendType) ([]string, map[strin
 		labels[value] = value
 	}
 	return order, labels
+}
+
+func defaultTunnelChoiceForBackend(bt config.BackendType, availableIDs []string) installer.TunnelChoice {
+	if bt == config.BackendWindows {
+		return installer.TunnelChoice{Provided: true, IDs: dedupeStrings(availableIDs)}
+	}
+	return installer.TunnelChoice{Provided: false}
 }
 
 func (m *installerModel) startUpdateTunnelSelector(bt config.BackendType, preset installer.TunnelChoice) {

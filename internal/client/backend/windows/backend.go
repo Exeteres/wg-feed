@@ -13,6 +13,7 @@ import (
 	"github.com/exeteres/wg-feed/internal/client/execx"
 	"github.com/exeteres/wg-feed/internal/client/namegen"
 	"github.com/exeteres/wg-feed/internal/client/state"
+	"github.com/exeteres/wg-feed/internal/client/wgquick"
 )
 
 type Backend struct {
@@ -22,6 +23,19 @@ type Backend struct {
 
 type tunnelData struct {
 	ServiceName string `json:"service_name"`
+	Amnezia     bool   `json:"amnezia,omitempty"`
+}
+
+const (
+	wireGuardExe = "wireguard.exe"
+	amneziaWGExe = "amneziawg.exe"
+)
+
+func managerExe(amnezia bool) string {
+	if amnezia {
+		return amneziaWGExe
+	}
+	return wireGuardExe
 }
 
 func resolveProgramDataDir() string {
@@ -43,6 +57,8 @@ func New(runner execx.Runner, logger *slog.Logger) *Backend {
 func (b *Backend) Apply(ctx context.Context, tunnel shared.ResolvedTunnel, state state.TunnelState) (state.TunnelState, error) {
 	b.Logger.Debug("windows apply started", "tunnel_id", tunnel.ID, "tunnel_name", tunnel.Name, "enabled", tunnel.EffectiveEnabled)
 	enabled := tunnel.EffectiveEnabled
+	amnezia := wgquick.HasAmneziaExtensions(tunnel.WGQuickConfig)
+	exe := managerExe(amnezia)
 	tunnelData := tunnelData{}
 	if len(state.Data) > 0 {
 		_ = json.Unmarshal(state.Data, &tunnelData)
@@ -50,7 +66,7 @@ func (b *Backend) Apply(ctx context.Context, tunnel shared.ResolvedTunnel, state
 	name := strings.TrimSpace(tunnelData.ServiceName)
 	if name == "" {
 		effective, err := namegen.EffectiveName(strings.TrimSpace(tunnel.Name), func(candidate string) (bool, error) {
-			return b.serviceNameOccupied(ctx, candidate)
+			return b.serviceNameOccupied(ctx, candidate, exe)
 		})
 		if err != nil {
 			return state, err
@@ -62,15 +78,16 @@ func (b *Backend) Apply(ctx context.Context, tunnel shared.ResolvedTunnel, state
 		return state, errors.New("windows backend requires a non-empty tunnel name")
 	}
 	tunnelData.ServiceName = name
+	tunnelData.Amnezia = amnezia
 	dataBytes, err := json.Marshal(tunnelData)
 	if err != nil {
 		return state, err
 	}
 	state.Data = dataBytes
-	// WireGuard for Windows uses wireguard.exe /installtunnelservice <configPath>
+	// WireGuard/AmneziaWG for Windows uses /installtunnelservice <configPath>
 	// and /uninstalltunnelservice <tunnelName>.
-	b.Logger.Debug("windows uninstall tunnel service", "service_name", name)
-	_, _ = b.Runner.Run(ctx, "wireguard.exe", "/uninstalltunnelservice", name)
+	b.Logger.Debug("windows uninstall tunnel service", "service_name", name, "manager_exe", exe)
+	_, _ = b.Runner.Run(ctx, exe, "/uninstalltunnelservice", name)
 	_ = os.Remove(tunnelConfigPath(name))
 	if !enabled {
 		b.Logger.Debug("windows apply disabled completed", "service_name", name)
@@ -87,8 +104,8 @@ func (b *Backend) Apply(ctx context.Context, tunnel shared.ResolvedTunnel, state
 	if err := os.WriteFile(configPath, []byte(wgQuickConfig), 0o600); err != nil {
 		return state, err
 	}
-	b.Logger.Debug("windows install tunnel service", "service_name", name, "config_path", configPath)
-	_, err = b.Runner.Run(ctx, "wireguard.exe", "/installtunnelservice", configPath)
+	b.Logger.Debug("windows install tunnel service", "service_name", name, "config_path", configPath, "manager_exe", exe)
+	_, err = b.Runner.Run(ctx, exe, "/installtunnelservice", configPath)
 	if err == nil {
 		b.Logger.Debug("windows apply completed", "service_name", name)
 	}
@@ -102,15 +119,16 @@ func (b *Backend) Remove(ctx context.Context, state state.TunnelState) error {
 	if name == "" {
 		return nil
 	}
-	b.Logger.Debug("windows remove uninstall tunnel service", "service_name", name)
-	_, _ = b.Runner.Run(ctx, "wireguard.exe", "/uninstalltunnelservice", name)
+	exe := managerExe(tunnelData.Amnezia)
+	b.Logger.Debug("windows remove uninstall tunnel service", "service_name", name, "manager_exe", exe)
+	_, _ = b.Runner.Run(ctx, exe, "/uninstalltunnelservice", name)
 	_ = os.Remove(tunnelConfigPath(name))
 	b.Logger.Debug("windows remove completed", "service_name", name)
 	return nil
 }
 
-func (b *Backend) serviceNameOccupied(ctx context.Context, name string) (bool, error) {
-	res, err := b.Runner.Run(ctx, "wireguard.exe", "/dumptunnels")
+func (b *Backend) serviceNameOccupied(ctx context.Context, name, exe string) (bool, error) {
+	res, err := b.Runner.Run(ctx, exe, "/dumptunnels")
 	if err != nil {
 		return false, err
 	}

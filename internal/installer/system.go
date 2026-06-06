@@ -22,9 +22,10 @@ import (
 )
 
 var (
-	DefaultConfigPath = defaultConfigPathForGOOS(runtime.GOOS, os.Getenv("ProgramData"))
+	DefaultStatePath  = defaultStatePathForGOOS(runtime.GOOS, os.Getenv("ProgramFiles"))
+	DefaultConfigPath = defaultConfigPathForGOOS(runtime.GOOS, os.Getenv("ProgramFiles"))
 	DefaultUnitPath   = defaultUnitPathForGOOS(runtime.GOOS)
-	DefaultDaemonPath = defaultDaemonPathForGOOS(runtime.GOOS, os.Getenv("ProgramData"))
+	DefaultDaemonPath = defaultDaemonPathForGOOS(runtime.GOOS, os.Getenv("ProgramFiles"))
 	DefaultService    = "wg-feed-daemon"
 )
 
@@ -70,7 +71,7 @@ func LoadConfigOrEmpty(configPath string) (config.Config, error) {
 	}
 	if _, err := os.Stat(configPath); err != nil {
 		if errors.Is(err, os.ErrNotExist) {
-			return config.Config{StatePath: config.DefaultStatePath, Feeds: map[string]config.FeedConfig{}}, nil
+			return config.Config{StatePath: DefaultStatePath, Feeds: map[string]config.FeedConfig{}}, nil
 		}
 		return config.Config{}, err
 	}
@@ -82,7 +83,7 @@ func LoadConfigOrEmpty(configPath string) (config.Config, error) {
 		cfg.Feeds = map[string]config.FeedConfig{}
 	}
 	if strings.TrimSpace(cfg.StatePath) == "" {
-		cfg.StatePath = config.DefaultStatePath
+		cfg.StatePath = DefaultStatePath
 	}
 	return cfg, nil
 }
@@ -391,7 +392,7 @@ func runSC(ctx context.Context, args ...string) error {
 func runSCOutput(ctx context.Context, args ...string) (string, error) {
 	cmd := exec.CommandContext(ctx, "sc.exe", args...)
 	out, err := cmd.CombinedOutput()
-	text := strings.TrimSpace(string(out))
+	text := strings.TrimSpace(decodeCommandOutput(out))
 	if err != nil {
 		return text, fmt.Errorf("sc.exe %s: %w (%s)", strings.Join(args, " "), err, text)
 	}
@@ -465,11 +466,11 @@ func daemonReleaseAssetName(releaseTag string) (string, error) {
 	}
 }
 
-func defaultConfigPathForGOOS(goos string, programData string) string {
+func defaultConfigPathForGOOS(goos string, programFiles string) string {
 	if goos == "windows" {
-		base := strings.TrimSpace(programData)
+		base := strings.TrimSpace(programFiles)
 		if base == "" {
-			base = `C:\ProgramData`
+			base = `C:\Program Files`
 		}
 		return filepath.Join(base, "wg-feed", "config.yaml")
 	}
@@ -483,15 +484,26 @@ func defaultUnitPathForGOOS(goos string) string {
 	return "/etc/systemd/system/wg-feed-daemon.service"
 }
 
-func defaultDaemonPathForGOOS(goos string, programData string) string {
+func defaultDaemonPathForGOOS(goos string, programFiles string) string {
 	if goos == "windows" {
-		base := strings.TrimSpace(programData)
+		base := strings.TrimSpace(programFiles)
 		if base == "" {
-			base = `C:\ProgramData`
+			base = `C:\Program Files`
 		}
 		return filepath.Join(base, "wg-feed", "wg-feed-daemon.exe")
 	}
 	return "/usr/local/bin/wg-feed-daemon"
+}
+
+func defaultStatePathForGOOS(goos string, programFiles string) string {
+	if goos == "windows" {
+		base := strings.TrimSpace(programFiles)
+		if base == "" {
+			base = `C:\Program Files`
+		}
+		return filepath.Join(base, "wg-feed", "state.json")
+	}
+	return config.DefaultStatePath
 }
 
 type downloadProgressReader struct {

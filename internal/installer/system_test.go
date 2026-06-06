@@ -413,11 +413,14 @@ func mustGetenv(t *testing.T, key string) string {
 func TestDefaultPathsForGOOS(t *testing.T) {
 	t.Parallel()
 
-	if got := defaultConfigPathForGOOS("windows", "C:\\ProgramData"); got != filepath.Join("C:\\ProgramData", "wg-feed", "config.yaml") {
+	if got := defaultConfigPathForGOOS("windows", "C:\\Program Files"); got != filepath.Join("C:\\Program Files", "wg-feed", "config.yaml") {
 		t.Fatalf("windows config path=%q", got)
 	}
-	if got := defaultDaemonPathForGOOS("windows", "C:\\ProgramData"); got != filepath.Join("C:\\ProgramData", "wg-feed", "wg-feed-daemon.exe") {
+	if got := defaultDaemonPathForGOOS("windows", "C:\\Program Files"); got != filepath.Join("C:\\Program Files", "wg-feed", "wg-feed-daemon.exe") {
 		t.Fatalf("windows daemon path=%q", got)
+	}
+	if got := defaultStatePathForGOOS("windows", "C:\\Program Files"); got != filepath.Join("C:\\Program Files", "wg-feed", "state.json") {
+		t.Fatalf("windows state path=%q", got)
 	}
 	if got := defaultUnitPathForGOOS("windows"); got != "" {
 		t.Fatalf("windows unit path=%q, want empty", got)
@@ -428,6 +431,9 @@ func TestDefaultPathsForGOOS(t *testing.T) {
 	}
 	if got := defaultDaemonPathForGOOS("linux", ""); got != "/usr/local/bin/wg-feed-daemon" {
 		t.Fatalf("linux daemon path=%q", got)
+	}
+	if got := defaultStatePathForGOOS("linux", ""); got != config.DefaultStatePath {
+		t.Fatalf("linux state path=%q", got)
 	}
 	if got := defaultUnitPathForGOOS("linux"); got != "/etc/systemd/system/wg-feed-daemon.service" {
 		t.Fatalf("linux unit path=%q", got)

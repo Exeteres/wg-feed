@@ -40,7 +40,7 @@ func InferExistingSnapshot(cfg config.Config) ExistingSnapshot {
 func BuildConfig(plan InstallPlan, feedDocs map[string]model.FeedDocument) (config.Config, error) {
 	statePath := strings.TrimSpace(plan.StatePath)
 	if statePath == "" {
-		statePath = config.DefaultStatePath
+		statePath = DefaultStatePath
 	}
 	if len(plan.Subscriptions) == 0 {
 		return config.Config{}, fmt.Errorf("at least one subscription is required")

@@ -51,6 +51,12 @@ func enabledTunnel(name string) shared.ResolvedTunnel {
 	}
 }
 
+func enabledAmneziaTunnel(name string) shared.ResolvedTunnel {
+	tunnel := enabledTunnel(name)
+	tunnel.WGQuickConfig = "[Interface]\nPrivateKey = x\nJc = 4\n\n[Peer]\nPublicKey = y\nAllowedIPs = 10.0.0.0/24\n"
+	return tunnel
+}
+
 func TestApply_Disabled_UninstallsOnlyAndPersistsServiceName(t *testing.T) {
 	t.Parallel()
 
@@ -234,7 +240,27 @@ func TestServiceNameOccupied_MatchesCaseInsensitive(t *testing.T) {
 	}}
 	b := newTestBackend(r)
 
-	occupied, err := b.serviceNameOccupied(context.Background(), "office")
+	occupied, err := b.serviceNameOccupied(context.Background(), "office", wireGuardExe)
+	if err != nil {
+		t.Fatalf("serviceNameOccupied error: %v", err)
+	}
+	if !occupied {
+		t.Fatalf("expected service name to be occupied")
+	}
+}
+
+func TestServiceNameOccupied_UsesAmneziaExecutable(t *testing.T) {
+	t.Parallel()
+
+	r := &fakeRunner{runFn: func(name string, args ...string) (execx.Result, error) {
+		if name == amneziaWGExe && len(args) == 1 && args[0] == "/dumptunnels" {
+			return execx.Result{Stdout: "Office\n"}, nil
+		}
+		return execx.Result{}, nil
+	}}
+	b := newTestBackend(r)
+
+	occupied, err := b.serviceNameOccupied(context.Background(), "office", amneziaWGExe)
 	if err != nil {
 		t.Fatalf("serviceNameOccupied error: %v", err)
 	}
@@ -251,11 +277,75 @@ func TestServiceNameOccupied_DumpFailureReturnsError(t *testing.T) {
 	}}
 	b := newTestBackend(r)
 
-	occupied, err := b.serviceNameOccupied(context.Background(), "office")
+	occupied, err := b.serviceNameOccupied(context.Background(), "office", wireGuardExe)
 	if err == nil {
 		t.Fatalf("expected error")
 	}
 	if occupied {
 		t.Fatalf("expected service name to be available")
+	}
+}
+
+func TestApply_Amnezia_UsesAmneziaExecutable(t *testing.T) {
+	tmp := t.TempDir()
+	t.Setenv("ProgramData", tmp)
+
+	r := &fakeRunner{}
+	b := newTestBackend(r)
+
+	nextState, err := b.Apply(context.Background(), enabledAmneziaTunnel("branch"), state.TunnelState{})
+	if err != nil {
+		t.Fatalf("Apply error: %v", err)
+	}
+
+	if len(r.calls) != 3 {
+		t.Fatalf("expected 3 commands (dumptunnels + uninstall + install), got %d", len(r.calls))
+	}
+	for i, call := range r.calls {
+		if call.name != amneziaWGExe {
+			t.Fatalf("expected call %d to use %q, got %#v", i, amneziaWGExe, call)
+		}
+	}
+
+	var td tunnelData
+	if err := json.Unmarshal(nextState.Data, &td); err != nil {
+		t.Fatalf("unmarshal state data: %v", err)
+	}
+	if !td.Amnezia {
+		t.Fatalf("expected persisted state to mark amnezia tunnel")
+	}
+}
+
+func TestRemove_AmneziaState_UsesAmneziaExecutable(t *testing.T) {
+	tmp := t.TempDir()
+	t.Setenv("ProgramData", tmp)
+
+	r := &fakeRunner{}
+	b := newTestBackend(r)
+
+	path := tunnelConfigPath("persisted")
+	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
+		t.Fatalf("mkdir: %v", err)
+	}
+	if err := os.WriteFile(path, []byte("x"), 0o600); err != nil {
+		t.Fatalf("write: %v", err)
+	}
+
+	data, err := json.Marshal(tunnelData{ServiceName: "persisted", Amnezia: true})
+	if err != nil {
+		t.Fatalf("marshal state data: %v", err)
+	}
+
+	if err := b.Remove(context.Background(), state.TunnelState{Data: data}); err != nil {
+		t.Fatalf("Remove error: %v", err)
+	}
+	if len(r.calls) != 1 {
+		t.Fatalf("expected one uninstall command, got %d", len(r.calls))
+	}
+	if r.calls[0].name != amneziaWGExe || len(r.calls[0].args) != 2 || r.calls[0].args[0] != "/uninstalltunnelservice" || r.calls[0].args[1] != "persisted" {
+		t.Fatalf("unexpected command: %#v", r.calls[0])
+	}
+	if _, err := os.Stat(path); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("expected config to be removed, stat err=%v", err)
 	}
 }
