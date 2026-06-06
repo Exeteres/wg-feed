@@ -226,8 +226,8 @@ func ApplyConfigSystem(ctx context.Context, cfg config.Config, opts ApplyOptions
 		if err := ensureWindowsService(ctx, opts.ServiceName, opts.DaemonPath, opts.ConfigPath); err != nil {
 			return err
 		}
-		if err := runSC(ctx, "start", opts.ServiceName); err != nil {
-			if !isWindowsServiceAlreadyRunning(err) {
+		if err := startWindowsService(ctx, opts.ServiceName); err != nil {
+			if !isWindowsServiceAlreadyRunningError(err) {
 				return err
 			}
 		}
@@ -288,7 +288,7 @@ func DetectInstallTraces(ctx context.Context, opts ApplyOptions) bool {
 		}
 	}
 	if runtime.GOOS == "windows" {
-		if _, err := runSCOutput(ctx, "query", opts.ServiceName); err == nil {
+		if ok, err := windowsServiceExists(ctx, opts.ServiceName); err == nil && ok {
 			return true
 		}
 		return false
@@ -324,8 +324,8 @@ func CurrentDaemonStatus(opts ApplyOptions) (DaemonStatus, string, error) {
 func UninstallSystem(ctx context.Context, opts ApplyOptions) error {
 	opts = NormalizeApplyOptions(opts)
 	if runtime.GOOS == "windows" {
-		_ = runSC(ctx, "stop", opts.ServiceName)
-		_ = runSC(ctx, "delete", opts.ServiceName)
+		_ = stopWindowsService(ctx, opts.ServiceName)
+		_ = deleteWindowsService(ctx, opts.ServiceName)
 
 		for _, path := range []string{opts.ConfigPath, opts.DaemonPath} {
 			if err := os.Remove(path); err != nil && !errors.Is(err, os.ErrNotExist) {
@@ -382,58 +382,6 @@ func runSystemctl(ctx context.Context, args ...string) error {
 		return fmt.Errorf("systemctl %s: %w (%s)", strings.Join(args, " "), err, strings.TrimSpace(string(out)))
 	}
 	return nil
-}
-
-func runSC(ctx context.Context, args ...string) error {
-	_, err := runSCOutput(ctx, args...)
-	return err
-}
-
-func runSCOutput(ctx context.Context, args ...string) (string, error) {
-	cmd := exec.CommandContext(ctx, "sc.exe", args...)
-	out, err := cmd.CombinedOutput()
-	text := strings.TrimSpace(decodeCommandOutput(out))
-	if err != nil {
-		return text, fmt.Errorf("sc.exe %s: %w (%s)", strings.Join(args, " "), err, text)
-	}
-	return text, nil
-}
-
-func ensureWindowsService(ctx context.Context, serviceName string, daemonPath string, configPath string) error {
-	serviceName = strings.TrimSpace(serviceName)
-	if serviceName == "" {
-		return fmt.Errorf("ServiceName is required")
-	}
-	binPath := fmt.Sprintf("\"%s\" --config \"%s\"", daemonPath, configPath)
-	if _, err := runSCOutput(ctx, "query", serviceName); err != nil {
-		if !isWindowsServiceMissing(err) {
-			return err
-		}
-		return runSC(
-			ctx,
-			"create", serviceName,
-			"binPath=", binPath,
-			"start=", "auto",
-			"DisplayName=", "wg-feed daemon",
-		)
-	}
-	return runSC(ctx, "config", serviceName, "binPath=", binPath, "start=", "auto")
-}
-
-func isWindowsServiceMissing(err error) bool {
-	if err == nil {
-		return false
-	}
-	msg := strings.ToLower(err.Error())
-	return strings.Contains(msg, "failed 1060") || strings.Contains(msg, "does not exist")
-}
-
-func isWindowsServiceAlreadyRunning(err error) bool {
-	if err == nil {
-		return false
-	}
-	msg := strings.ToLower(err.Error())
-	return strings.Contains(msg, "already running") || strings.Contains(msg, "1056")
 }
 
 func detectReleaseArch() (string, error) {
