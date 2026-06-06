@@ -98,6 +98,16 @@ func TestApplyConfigSystem_SkipsDaemonDownloadWhenChecksumMatches(t *testing.T) 
 	if _, err := os.Stat(configPath); err != nil {
 		t.Fatalf("config not written: %v", err)
 	}
+	configContent, err := os.ReadFile(configPath)
+	if err != nil {
+		t.Fatalf("read config: %v", err)
+	}
+	if !strings.Contains(string(configContent), "state_path:") {
+		t.Fatalf("config missing canonical state_path key: %s", string(configContent))
+	}
+	if strings.Contains(string(configContent), "StatePath:") {
+		t.Fatalf("config should not contain Go struct field key StatePath")
+	}
 	unitContent, err := os.ReadFile(unitPath)
 	if err != nil {
 		t.Fatalf("unit not written: %v", err)

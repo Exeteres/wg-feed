@@ -46,34 +46,34 @@ const (
 )
 
 type Config struct {
-	StatePath string                `koanf:"state_path"`
-	Feeds     map[string]FeedConfig `koanf:"feeds"`
+	StatePath string                `koanf:"state_path" yaml:"state_path" json:"state_path"`
+	Feeds     map[string]FeedConfig `koanf:"feeds" yaml:"feeds" json:"feeds"`
 }
 
 type FeedConfig struct {
-	Sync     FeedSyncConfig               `koanf:"sync"`
-	Backends map[string]FeedBackendConfig `koanf:"backends"`
-	Tunnels  map[string]FeedTunnelConfig  `koanf:"tunnels"`
+	Sync     FeedSyncConfig               `koanf:"sync" yaml:"sync" json:"sync"`
+	Backends map[string]FeedBackendConfig `koanf:"backends" yaml:"backends" json:"backends"`
+	Tunnels  map[string]FeedTunnelConfig  `koanf:"tunnels" yaml:"tunnels" json:"tunnels"`
 }
 
 type FeedTunnelConfig struct {
-	Enabled *bool `koanf:"enabled"`
+	Enabled *bool `koanf:"enabled" yaml:"enabled,omitempty" json:"enabled,omitempty"`
 }
 
 type FeedSyncConfig struct {
-	Enabled   bool                  `koanf:"enabled"`
-	Mode      SyncMode              `koanf:"mode"`
-	Polling   FeedPollingSyncConfig `koanf:"polling"`
-	Endpoints []string              `koanf:"endpoints"`
+	Enabled   bool                  `koanf:"enabled" yaml:"enabled" json:"enabled"`
+	Mode      SyncMode              `koanf:"mode" yaml:"mode" json:"mode"`
+	Polling   FeedPollingSyncConfig `koanf:"polling" yaml:"polling" json:"polling"`
+	Endpoints []string              `koanf:"endpoints" yaml:"endpoints" json:"endpoints"`
 }
 
 type FeedPollingSyncConfig struct {
-	Interval int `koanf:"interval"`
+	Interval int `koanf:"interval" yaml:"interval" json:"interval"`
 }
 
 type FeedBackendConfig struct {
-	Type    BackendType                 `koanf:"type"`
-	Tunnels map[string]FeedTunnelConfig `koanf:"tunnels"`
+	Type    BackendType                 `koanf:"type" yaml:"type" json:"type"`
+	Tunnels map[string]FeedTunnelConfig `koanf:"tunnels" yaml:"tunnels" json:"tunnels"`
 }
 
 func Load(configPath string) (Config, error) {
