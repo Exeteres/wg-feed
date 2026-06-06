@@ -31,14 +31,14 @@ func ensureWindowsService(_ context.Context, serviceName string, daemonPath stri
 		if !errors.Is(err, windows.ERROR_SERVICE_DOES_NOT_EXIST) {
 			return fmt.Errorf("open service %q: %w", serviceName, err)
 		}
-		cfg := mgr.Config{DisplayName: "wg-feed daemon", StartType: mgr.StartAutomatic}
+		cfg := mgr.Config{DisplayName: "WG Feed Daemon", StartType: mgr.StartAutomatic}
 		s, err = m.CreateService(serviceName, daemonPath, cfg, "--config", configPath)
 		if err != nil {
 			return fmt.Errorf("create service %q: %w", serviceName, err)
 		}
 		defer func() { _ = s.Close() }()
 
-		if err := eventlog.InstallAsEventCreate(serviceName, eventlog.Info|eventlog.Warning|eventlog.Error); err != nil {
+		if err := ensureWindowsEventSource(serviceName); err != nil {
 			_ = s.Delete()
 			return fmt.Errorf("install event log source %q: %w", serviceName, err)
 		}
@@ -51,12 +51,30 @@ func ensureWindowsService(_ context.Context, serviceName string, daemonPath stri
 		return fmt.Errorf("read service %q config: %w", serviceName, err)
 	}
 	cfg.StartType = mgr.StartAutomatic
-	cfg.DisplayName = "wg-feed daemon"
+	cfg.DisplayName = "WG Feed Daemon"
 	cfg.BinaryPathName = fmt.Sprintf("\"%s\" --config \"%s\"", daemonPath, configPath)
 	if err := s.UpdateConfig(cfg); err != nil {
 		return fmt.Errorf("update service %q config: %w", serviceName, err)
 	}
+	if err := ensureWindowsEventSource(serviceName); err != nil {
+		return fmt.Errorf("ensure event log source %q: %w", serviceName, err)
+	}
 	return nil
+}
+
+func ensureWindowsEventSource(serviceName string) error {
+	err := eventlog.InstallAsEventCreate(serviceName, eventlog.Info|eventlog.Warning|eventlog.Error)
+	if err == nil {
+		return nil
+	}
+	if errors.Is(err, windows.ERROR_FILE_EXISTS) || errors.Is(err, windows.ERROR_ALREADY_EXISTS) {
+		return nil
+	}
+	msg := strings.ToLower(err.Error())
+	if strings.Contains(msg, "exists") {
+		return nil
+	}
+	return err
 }
 
 func startWindowsService(_ context.Context, serviceName string) error {

@@ -1,11 +1,8 @@
 package main
 
 import (
-	"context"
 	"flag"
 	"os"
-	"os/signal"
-	"syscall"
 
 	"github.com/exeteres/wg-feed/internal/client/config"
 	"github.com/exeteres/wg-feed/internal/daemon"
@@ -24,10 +21,7 @@ func main() {
 		os.Exit(1)
 	}
 
-	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
-	defer stop()
-
-	if err := daemon.Run(ctx, cfg, logger); err != nil {
+	if err := runDaemonEntry(cfg, logger, daemon.Run); err != nil {
 		logger.Error("run error", "err", err)
 		os.Exit(1)
 	}
