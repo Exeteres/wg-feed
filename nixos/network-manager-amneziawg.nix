@@ -14,7 +14,7 @@
   networkmanager,
 }:
 stdenv.mkDerivation (finalAttrs: {
-  pname = "network-manager-amneziawg";
+  pname = "networkmanager-amneziawg";
   version = "0.9.9";
 
   src = fetchFromGitHub {

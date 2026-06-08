@@ -3,7 +3,7 @@
 The module provides:
 
 - A package `pkgs.wg-feed` containing all four binaries (`wg-feed-apply`, `wg-feed-daemon`, `wg-feed-server`, `wg-feed-upload`)
-- A package `pkgs.network-manager-amneziawg` for the [NetworkManager AmneziaWG plugin](https://github.com/vovochka404/network-manager-amneziawg), including the GTK editor UI plugin
+- A package `pkgs.networkmanager-amneziawg` for the [NetworkManager AmneziaWG plugin](https://github.com/vovochka404/network-manager-amneziawg), including the GTK editor UI plugin
 - A systemd service `wg-feed-daemon` controlled by `services.wg-feed.*`
 
 Example usage:
@@ -109,13 +109,13 @@ Amnezia options:
 
 - `services.wg-feed.amnezia.enable`: adds `amneziawg-tools` and `amneziawg-go` to daemon service PATH and installs both into `environment.systemPackages`.
 - `services.wg-feed.amnezia.networkManagerPlugin.enable`: installs NetworkManager AmneziaWG plugin package into `environment.systemPackages` and registers it in `networking.networkmanager.plugins`.
-- `services.wg-feed.amnezia.networkManagerPlugin.package`: override plugin package derivation (defaults to `pkgs.network-manager-amneziawg`).
+- `services.wg-feed.amnezia.networkManagerPlugin.package`: override plugin package derivation (defaults to `pkgs.networkmanager-amneziawg`).
 - `services.wg-feed.amnezia.useKernelModule`: enables kernel module loading for `amneziawg`.
 
 Flake package exports:
 
 - `packages.<system>.wg-feed`
-- `packages.<system>.network-manager-amneziawg`
+- `packages.<system>.networkmanager-amneziawg`
 
 When any configured backend uses `type = "netns"`, the module automatically
 adds `CAP_SYS_ADMIN` (in addition to `CAP_NET_ADMIN`) to the
