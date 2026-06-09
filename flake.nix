@@ -15,7 +15,7 @@
       wg-feed = prev.callPackage ./nixos/package.nix {
         src = self;
       };
-      network-manager-amneziawg = prev.callPackage ./nixos/network-manager-amneziawg.nix {};
+      networkmanager-amneziawg = prev.callPackage ./nixos/networkmanager-amneziawg.nix {};
     };
   in
     (flake-utils.lib.eachDefaultSystem (system: let
@@ -26,7 +26,7 @@
     in {
       packages = {
         wg-feed = pkgs.wg-feed;
-        network-manager-amneziawg = pkgs.network-manager-amneziawg;
+        networkmanager-amneziawg = pkgs.networkmanager-amneziawg;
         default = pkgs.wg-feed;
       };
 

@@ -179,8 +179,8 @@ in {
 
         package = mkOption {
           type = types.package;
-          default = pkgs.network-manager-amneziawg;
-          defaultText = "pkgs.network-manager-amneziawg";
+          default = pkgs.networkmanager-amneziawg;
+          defaultText = "pkgs.networkmanager-amneziawg";
           description = "Package providing the NetworkManager AmneziaWG VPN plugin.";
         };
       };
