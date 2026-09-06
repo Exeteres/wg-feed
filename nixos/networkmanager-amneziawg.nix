@@ -15,13 +15,13 @@
 }:
 stdenv.mkDerivation (finalAttrs: {
   pname = "networkmanager-amneziawg";
-  version = "0.9.10";
+  version = "0.9.11";
 
   src = fetchFromGitHub {
     owner = "vovochka404";
     repo = "network-manager-amneziawg";
     rev = "v${finalAttrs.version}";
-    hash = "sha256-AeqBlbQQhJFZelawqbUGBtWywi72sB8FxZoB50tm/1k=";
+    hash = "sha256-JxP1Ggn6bK8toul+NoID6cQKyshiycBlC+9X7vb18Cc=";
   };
 
   nativeBuildInputs = [
