@@ -1,7 +1,6 @@
 {
   lib,
   buildGoModule,
-  go_1_25,
   src ? ../.,
   version ? "0.0.0",
   vendorHash ? "sha256-cXW+njxUyxBkAhqDyLkY3yuFjsQZ/17OdI2s32tUVyM=",
@@ -9,9 +8,6 @@
 buildGoModule {
   pname = "wg-feed";
   inherit version src vendorHash;
-
-  # go.mod requires Go 1.25.x
-  go = go_1_25;
 
   subPackages = [
     "cmd/wg-feed-apply"

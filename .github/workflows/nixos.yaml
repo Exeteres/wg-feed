@@ -1,0 +1,28 @@
+name: NixOS module
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    name: Latest unstable (${{ matrix.kernel }})
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        kernel: [default, zen]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: cachix/install-nix-action@v31
+      - name: Build NixOS module against latest unstable
+        run: >-
+          nix build -L
+          --override-input nixpkgs github:NixOS/nixpkgs/nixos-unstable
+          --no-write-lock-file
+          .#checks.x86_64-linux.nixos-module-${{ matrix.kernel }}
