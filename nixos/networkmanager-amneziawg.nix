@@ -24,6 +24,8 @@ stdenv.mkDerivation (finalAttrs: {
     hash = "sha256-JxP1Ggn6bK8toul+NoID6cQKyshiycBlC+9X7vb18Cc=";
   };
 
+  patches = [./patches/networkmanager-amneziawg-kernel-abi.patch];
+
   nativeBuildInputs = [
     cmake
     pkg-config

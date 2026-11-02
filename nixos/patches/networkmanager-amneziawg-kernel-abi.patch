@@ -1,0 +1,28 @@
+diff --git a/shared/amneziawg.c b/shared/amneziawg.c
+--- a/shared/amneziawg.c
++++ b/shared/amneziawg.c
+@@ -31,9 +31,10 @@
+  *  - magic headers (H1..H4) were NUL strings in old kernels and became
+  *    packed u64 ranges (u32_range_t, hi<<32|lo) in newer ones;
+  *  - peer keepalive interval was u16 and became u32.
+- * Detect the format from the loaded module version (3.x = new ABI,
+- * older = legacy). When the version cannot be read, default to the new
+- * ABI and fall back to legacy if the kernel rejects the request.
++ * Version 3.x identifies the new ABI. Earlier version strings are ambiguous:
++ * AmneziaWG 3.0 modules can still report 1.0.0. Try the new ABI when the
++ * version is ambiguous or unavailable and fall back to legacy if the kernel
++ * rejects the request.
+  */
+ static bool
+ awg_kernel_uses_current_abi(bool *known)
+@@ -56,8 +57,8 @@ awg_kernel_uses_current_abi(bool *known)
+     if (sscanf(buf, "%u", &major) != 1)
+         return true;
+ 
+-    *known = true;
+-    return major >= 3;
++    *known = major >= 3;
++    return true;
+ }
+ 
+ /* wireguard.h netlink uapi: */
