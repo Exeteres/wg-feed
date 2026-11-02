@@ -267,6 +267,11 @@ in {
     };
 
     boot.kernelModules = optionals cfg.amnezia.useKernelModule ["amneziawg"];
-    boot.extraModulePackages = optionals cfg.amnezia.useKernelModule (with config.boot.kernelPackages; [amneziawg]);
+    boot.extraModulePackages = optionals cfg.amnezia.useKernelModule [
+      (config.boot.kernelPackages.amneziawg.overrideAttrs (old: {
+        # report the package version so the NetworkManager plugin selects the matching ABI
+        makeFlags = (old.makeFlags or []) ++ ["WIREGUARD_VERSION=${old.version}"];
+      }))
+    ];
   };
 }
