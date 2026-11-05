@@ -1,0 +1,14 @@
+# Upstream PR: https://github.com/vovochka404/network-manager-amneziawg/pull/19
+# The service already supports per-connection D-Bus and interface names.
+diff --git a/nm-amneziawg-service.name.in b/nm-amneziawg-service.name.in
+--- a/nm-amneziawg-service.name.in
++++ b/nm-amneziawg-service.name.in
+@@ -2,7 +2,7 @@
+ name=amneziawg
+ service=org.freedesktop.NetworkManager.amneziawg
+ program=@CMAKE_INSTALL_PREFIX@/@CMAKE_INSTALL_LIBEXECDIR@/nm-amneziawg-service
+-supports-multiple-connections=false
++supports-multiple-connections=true
+ 
+ [libnm]
+ plugin=@NM_PLUGIN_DIR@/libnm-vpn-plugin-amneziawg.so
