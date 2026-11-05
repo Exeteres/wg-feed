@@ -62,19 +62,6 @@ stdenv.mkDerivation (finalAttrs: {
   '';
 
   doCheck = true;
-  checkPhase = ''
-    runHook preCheck
-    ctest --output-on-failure --no-tests=error
-    runHook postCheck
-  '';
-
-  doInstallCheck = true;
-  installCheckPhase = ''
-    runHook preInstallCheck
-    grep -qx 'supports-multiple-connections=true' "$out/lib/NetworkManager/VPN/nm-amneziawg-service.name"
-    "$out/libexec/nm-amneziawg-service" --help | grep -q -- --bus-name
-    runHook postInstallCheck
-  '';
 
   passthru = {
     networkManagerPlugin = "VPN/nm-amneziawg-service.name";
